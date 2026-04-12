@@ -43,7 +43,7 @@ class Encoder(nn.Module):
     for richer representation of the partial-observable scene.
     """
 
-    def __init__(self, latent_dim: int = 256, img_channels: int = 3):
+    def __init__(self, latent_dim: int = 256, img_channels: int = 3, img_size: int = 48):
         super().__init__()
         self.latent_dim = latent_dim
         self.cnn = nn.Sequential(
@@ -55,9 +55,9 @@ class Encoder(nn.Module):
             nn.ReLU(),
             nn.Flatten(),
         )
-        # Compute flat size by dry-run
+        # Compute flat size by dry-run using actual img_size
         with torch.no_grad():
-            dummy = torch.zeros(1, img_channels, 48, 48)
+            dummy = torch.zeros(1, img_channels, img_size, img_size)
             flat_size = self.cnn(dummy).shape[1]
 
         self.head = nn.Linear(flat_size, latent_dim)
@@ -141,11 +141,11 @@ class LeWM(nn.Module):
 
     SIGREG_LAMBDA = 0.1    # weight of regularisation term
 
-    def __init__(self, latent_dim: int = 256, n_actions: int = 7):
+    def __init__(self, latent_dim: int = 256, n_actions: int = 7, img_size: int = 48):
         super().__init__()
         self.latent_dim = latent_dim
         self.n_actions  = n_actions
-        self.encoder    = Encoder(latent_dim)
+        self.encoder    = Encoder(latent_dim, img_size=img_size)
         self.predictor  = Predictor(latent_dim, n_actions)
 
     def encode(self, obs: torch.Tensor) -> torch.Tensor:

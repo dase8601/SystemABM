@@ -305,7 +305,7 @@ def run_abm_loop(
             return x.flatten().unsqueeze(0).to(device)
 
     else:
-        lewm     = LeWM(latent_dim=LATENT_DIM, n_actions=n_actions).to(device)
+        lewm     = LeWM(latent_dim=LATENT_DIM, n_actions=n_actions, img_size=img_h).to(device)
         agent    = PPOAgent(latent_dim=LATENT_DIM, n_actions=n_actions, hidden=HIDDEN_SIZE).to(device)
         ppo      = PPO(agent, lr=PPO_LR)
         buf_ppo  = RolloutBuffer(PPO_ROLLOUT, n_envs, LATENT_DIM, device, hidden_size=HIDDEN_SIZE)
