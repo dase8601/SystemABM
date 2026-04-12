@@ -260,10 +260,12 @@ def run_abm_loop(
         "mode":         [],
         "wall_time_s":  [],
     }
-    ssl_ewa     = None
-    mode_str    = "OBSERVE" if condition != "ppo_only" else "ACT"
-    steps_to_80 = None
-    env_step    = 0
+    ssl_ewa          = None
+    mode_str         = "OBSERVE" if condition != "ppo_only" else "ACT"
+    steps_to_80      = None
+    env_step         = 0
+    encoder_frozen   = False   # set True once ssl_ewa < SSL_FREEZE_THRESHOLD
+    SSL_FREEZE_THRESHOLD = 0.05
 
     # Per-env episode return accumulators
     ep_ret    = np.zeros(n_envs, dtype=np.float32)
@@ -275,12 +277,15 @@ def run_abm_loop(
         # ── Mode determination ──────────────────────────────────────────────
         if condition == "ppo_only":
             current_mode = Mode.ACT
+        elif encoder_frozen:
+            # Encoder converged — stay in ACT for the rest of the run
+            current_mode = Mode.ACT
         elif condition == "autonomous":
             current_mode = sysm.mode
         else:
             current_mode = sysm.step(env_step)
 
-        mode_str = current_mode.name
+        mode_str = "ACT(frozen)" if encoder_frozen else current_mode.name
 
         # ── OBSERVE step ────────────────────────────────────────────────────
         if current_mode == Mode.OBSERVE:
@@ -309,6 +314,17 @@ def run_abm_loop(
 
             if condition == "autonomous" and ssl_loss_val is not None:
                 sysm.observe_step(ssl_loss_val, env_step)
+
+            # Freeze encoder permanently once SSL loss has converged
+            if (not encoder_frozen and ssl_ewa is not None
+                    and ssl_ewa < SSL_FREEZE_THRESHOLD and condition != "ppo_only"):
+                encoder_frozen = True
+                for p in lewm.encoder.parameters():
+                    p.requires_grad_(False)
+                logger.info(
+                    f"[{condition.upper()}] Encoder frozen at step {env_step} "
+                    f"(ssl_ewa={ssl_ewa:.4f}) — PPO will train to end of run"
+                )
 
         # ── ACT step ────────────────────────────────────────────────────────
         else:
@@ -351,14 +367,14 @@ def run_abm_loop(
 
         # ── Periodic evaluation ─────────────────────────────────────────────
         if env_step % EVAL_INTERVAL < n_envs:
-            if lewm is not None:
+            if lewm is not None and not encoder_frozen:
                 for p in lewm.encoder.parameters():
                     p.requires_grad_(False)
 
             sr = eval_agent(agent, encoder_single, device,
                             seed_offset=9000 + env_step, n_eps=EVAL_EPISODES)
 
-            if lewm is not None:
+            if lewm is not None and not encoder_frozen:
                 for p in lewm.encoder.parameters():
                     p.requires_grad_(True)
 
@@ -367,10 +383,11 @@ def run_abm_loop(
 
             n_sw    = sysm.n_switches() if sysm else 0
             elapsed = time.time() - t0
+            frozen_tag = " [ENC FROZEN]" if encoder_frozen else ""
             logger.info(
-                f"[{condition.upper()}] step={env_step:7d} | mode={mode_str:7s} | "
+                f"[{condition.upper()}] step={env_step:7d} | mode={mode_str:12s} | "
                 f"success={sr:.1%} | ssl_ewa={ssl_ewa or 0.0:.4f} | "
-                f"switches={n_sw} | {elapsed:.0f}s"
+                f"switches={n_sw}{frozen_tag} | {elapsed:.0f}s"
             )
 
             metrics["env_step"].append(env_step)
