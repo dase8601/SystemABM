@@ -265,7 +265,7 @@ def run_abm_loop(
     steps_to_80      = None
     env_step         = 0
     encoder_frozen   = False   # set True once ssl_ewa < SSL_FREEZE_THRESHOLD
-    SSL_FREEZE_THRESHOLD = 0.05
+    SSL_FREEZE_THRESHOLD = 0.08  # ssl_ewa hovers 0.07-0.09 when converged
 
     # Per-env episode return accumulators
     ep_ret    = np.zeros(n_envs, dtype=np.float32)
@@ -291,8 +291,17 @@ def run_abm_loop(
         if current_mode == Mode.OBSERVE:
             actions  = envs.action_space.sample()           # (N,) numpy
             obs_imgs = obs["image"].copy()                  # (N, H, W, C)
-            next_obs, _, terms, truncs, _ = envs.step(actions)
-            next_imgs = next_obs["image"]                   # (N, H, W, C)
+            next_obs, _, terms, truncs, infos = envs.step(actions)
+            next_imgs = next_obs["image"].copy()            # (N, H, W, C)
+
+            # AsyncVectorEnv auto-resets on termination and returns the first
+            # obs of the NEW episode as next_obs — corrupting LeWM's target.
+            # Gymnasium stores the true terminal obs in infos["final_observation"].
+            final_mask = infos.get("_final_observation", np.zeros(n_envs, dtype=bool))
+            if final_mask.any() and "final_observation" in infos:
+                for i in range(n_envs):
+                    if final_mask[i]:
+                        next_imgs[i] = infos["final_observation"]["image"][i]
 
             for i in range(n_envs):
                 buf_lew.push(obs_imgs[i], int(actions[i]), next_imgs[i])
