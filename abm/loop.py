@@ -192,7 +192,7 @@ def eval_crafter(
         done   = False
         ep_steps = 0
 
-        while not done and ep_steps < 10_000:   # Crafter episodes are up to 10K steps
+        while not done and ep_steps < 1_000:   # cap at 1K for fast eval (full ep is 10K)
             with torch.no_grad():
                 z = encoder_fn(obs)
                 action, _, _, _, lstm_state = agent.get_action_and_value(
@@ -260,7 +260,7 @@ def run_abm_loop(
         # Crafter scores are naturally small — don't trigger ACT→OBSERVE
         # switches unless score is near zero AND flat
         min_sr_to_stay  = 0.03
-        solve_threshold = 0.15   # ~3/22 achievements = meaningful progress
+        solve_threshold = 1.01   # never auto-stop on Crafter — run full budget
     else:  # doorkey
         img_h = img_w = IMG_H
         n_actions     = N_ACTIONS
@@ -465,7 +465,7 @@ def run_abm_loop(
             if env_type == "crafter":
                 sr, per_tier = eval_crafter(
                     agent, encoder_single, device,
-                    seed_offset=9000 + env_step, n_eps=EVAL_EPISODES,
+                    seed_offset=9000 + env_step, n_eps=20,  # 20 eps, capped at 1K steps each
                 )
             else:
                 sr       = eval_doorkey(agent, encoder_single, device,
