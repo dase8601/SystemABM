@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-13 23:10 — Fix MiniWorld headless rendering on RunPod
+
+### Fixes
+- `setup_cloud.sh` — Install OpenGL system libraries (libglu1-mesa-dev, xvfb) for MiniWorld's pyglet 3D rendering on headless GPU servers. Run commands now use `xvfb-run -a` prefix.
+
+---
+
 ## 2026-04-13 23:00 — Replace Habitat with MiniWorld (pip-installable 3D navigation)
 
 ### Why

@@ -7,7 +7,7 @@
 # Then run:
 #   DoorKey:    python abm_experiment.py --all --device auto --steps 800000
 #   Crafter:    python abm_experiment.py --all --device auto --env crafter --steps 1000000
-#   MiniWorld:  python abm_experiment.py --all --device auto --env miniworld --steps 500000
+#   MiniWorld:  xvfb-run -a python abm_experiment.py --all --device auto --env miniworld --steps 500000
 #
 # MiniWorld + V-JEPA 2.1 benefits from A100 but works on any CUDA GPU.
 #
@@ -17,6 +17,9 @@
 #   %cd /content/drive/MyDrive/jepa
 
 set -e
+
+echo "=== Installing system dependencies (OpenGL for MiniWorld) ==="
+apt-get update -qq && apt-get install -y -qq libglu1-mesa-dev libgl1-mesa-dev freeglut3-dev xvfb > /dev/null 2>&1
 
 echo "=== Installing PyTorch (CUDA 12.1) ==="
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121 -q
@@ -28,7 +31,7 @@ echo "=== Installing MiniWorld + V-JEPA dependencies ==="
 pip install miniworld omegaconf timm Pillow -q
 
 echo "=== Verifying ==="
-python -c "
+xvfb-run -a python -c "
 import torch, gymnasium, minigrid
 print(f'PyTorch: {torch.__version__}')
 print(f'CUDA available: {torch.cuda.is_available()}')
@@ -45,11 +48,11 @@ except: print('crafter: not installed')
 
 try:
     import miniworld; print('miniworld: OK')
-except: print('miniworld: FAILED')
+except Exception as e: print(f'miniworld: FAILED ({e})')
 
 print()
 print('Run commands:')
 print('  DoorKey:   python abm_experiment.py --all --device auto --steps 800000')
 print('  Crafter:   python abm_experiment.py --all --device auto --env crafter --steps 1000000')
-print('  MiniWorld: python abm_experiment.py --all --device auto --env miniworld --steps 500000')
+print('  MiniWorld: xvfb-run -a python abm_experiment.py --all --device auto --env miniworld --steps 500000')
 "
