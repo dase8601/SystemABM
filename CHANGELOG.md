@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-04-13 23:30 — Fix MiniWorld AsyncVectorEnv X crash + persistent Xvfb
+
+### Fixes
+- `abm/loop.py` — Force `use_async=False` for MiniWorld vectorized envs. AsyncVectorEnv forks 16 processes that all compete for the same X display, crashing the X server. SyncVectorEnv runs all envs in one process reliably.
+- `setup_cloud.sh` — Use persistent `Xvfb :1` instead of `xvfb-run -a`. More stable for long training runs. Run commands no longer need `xvfb-run` prefix.
+
+---
+
 ## 2026-04-13 23:10 — Fix MiniWorld headless rendering on RunPod
 
 ### Fixes

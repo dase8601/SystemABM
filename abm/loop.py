@@ -327,7 +327,7 @@ def run_abm_loop(
         n_actions           = 3       # turn_left, turn_right, move_forward
         _make_env           = make_miniworld_env
         _make_vec           = lambda n, seed, use_async: make_miniworld_vec_env(
-                                  n, seed=seed, use_async=use_async, img_size=160)
+                                  n, seed=seed, use_async=False, img_size=160)  # sync — OpenGL can't share X across processes
         latent_dim          = 768     # V-JEPA 2.1 ViT-B feature dim
         ppo_rollout         = 128
         eval_interval       = 10_000
