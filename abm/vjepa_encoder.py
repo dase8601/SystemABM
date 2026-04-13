@@ -94,7 +94,7 @@ class VJEPAEncoder:
         Convert observation dict to (B, 3, H, W) float32 tensor.
         Handles both batch (N, H, W, C) and single (H, W, C) observations.
         """
-        imgs = obs_dict["rgb"]  # Habitat uses "rgb" key
+        imgs = obs_dict.get("rgb", obs_dict.get("image"))  # support both keys
         if isinstance(imgs, np.ndarray):
             if imgs.ndim == 3:
                 imgs = imgs[np.newaxis]  # (H, W, C) → (1, H, W, C)

@@ -76,11 +76,11 @@ def plot_learning_curves(results: dict, save_dir: Path, env_type: str) -> Path:
                if env_type == "crafter" else
                "Success Rate (50-episode eval)")
     env_names = {"crafter": "Crafter", "doorkey": "MiniGrid-DoorKey-6x6",
-                  "habitat": "Habitat PointNav"}
+                  "miniworld": "MiniWorld-MazeS3"}
     env_name = env_names.get(env_type, env_type)
     if env_type == "crafter":
         target, target_label = 0.15, "15% score target"
-    elif env_type == "habitat":
+    elif env_type == "miniworld":
         target, target_label = 0.50, "50% nav success target"
     else:
         target, target_label = 0.80, "80% target"
@@ -100,14 +100,14 @@ def plot_learning_curves(results: dict, save_dir: Path, env_type: str) -> Path:
     ax.axhline(target, color="red", linestyle="--", lw=1.2, label=target_label)
     ax.set_xlabel("Environment Steps", fontsize=11)
     ax.set_ylabel(y_label, fontsize=11)
-    subtitle = ("V-JEPA 2.1 (80M) + LSTM-PPO" if env_type == "habitat"
+    subtitle = ("V-JEPA 2.1 (80M) + LSTM-PPO" if env_type == "miniworld"
                  else "LeWM (1.5M params) + LSTM-PPO")
     ax.set_title(
         f"A-B-M Loop: Autonomous vs Fixed-Schedule Mode Switching\n"
         f"{env_name}  |  {subtitle}",
         fontsize=11,
     )
-    ax.set_ylim(-0.02, 1.05 if env_type not in ("crafter",) else 0.5)
+    ax.set_ylim(-0.02, 0.5 if env_type == "crafter" else 1.05)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.0%}"))
     ax.legend(fontsize=9, loc="upper left")
     ax.grid(alpha=0.3)
@@ -326,11 +326,11 @@ def _img_tag(path: Path, max_width: int = 900) -> str:
 def write_report(save_dir: Path, results: dict, plot_paths: dict,
                  env_type: str) -> Path:
     env_names  = {"crafter": "Crafter", "doorkey": "MiniGrid-DoorKey-6x6",
-                   "habitat": "Habitat PointNav"}
+                   "miniworld": "MiniWorld-MazeS3"}
     env_name   = env_names.get(env_type, env_type)
     if env_type == "crafter":
         metric_col = "Steps to 15% score"
-    elif env_type == "habitat":
+    elif env_type == "miniworld":
         metric_col = "Steps to 50% nav success"
     else:
         metric_col = "Steps to 80%"
@@ -387,7 +387,7 @@ def write_report(save_dir: Path, results: dict, plot_paths: dict,
   <h1>A-B-M Experiment: Autonomous vs Fixed-Schedule Mode Switching</h1>
   <p>
     Empirical test of the Dupoux/LeCun/Malik A-B-M architecture (arXiv 2603.15381)
-    on <b>{env_name}</b>.  {"System A = V-JEPA 2.1 ViT-B (80M params, frozen pretrained encoder) + action-conditioned predictor." if env_type == "habitat" else "System A = LeWM (~1.5M params, trains from pixels)."}
+    on <b>{env_name}</b>.  {"System A = V-JEPA 2.1 ViT-B (80M params, frozen pretrained encoder) + action-conditioned predictor." if env_type == "miniworld" else "System A = LeWM (~1.5M params, trains from pixels)."}
     System B = LSTM-PPO.  System M = autonomous plateau-detect FSM vs fixed-schedule timer.
   </p>
   <div class="card">
@@ -434,8 +434,8 @@ def main():
     parser.add_argument("--all",    action="store_true", help="Run all three conditions")
     parser.add_argument("--device", default="auto",       help="auto | mps | cpu | cuda")
     parser.add_argument("--env",    default="doorkey",
-                        choices=["doorkey", "crafter", "habitat"],
-                        help="Environment: doorkey | crafter | habitat")
+                        choices=["doorkey", "crafter", "miniworld"],
+                        help="Environment: doorkey | crafter | miniworld")
     parser.add_argument("--steps",  type=int, default=800_000)
     parser.add_argument("--seed",   type=int, default=42)
     parser.add_argument("--n-envs", type=int, default=16)

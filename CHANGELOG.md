@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-04-13 23:00 — Replace Habitat with MiniWorld (pip-installable 3D navigation)
+
+### Why
+habitat-sim only supports Python <=3.9 via conda, requires multi-GB scene datasets
+with academic registration, and has fragile installation on RunPod. MiniWorld provides
+3D first-person maze navigation via `pip install miniworld` with zero friction.
+
+### New files
+- `abm/miniworld_env.py` — MiniWorld-MazeS3 Gymnasium wrapper (160x160 RGB, 3 discrete actions)
+
+### Modified files
+- `abm/loop.py` — Replaced habitat config block with miniworld; replaced `eval_habitat()` with `eval_miniworld()`
+- `abm/vjepa_encoder.py` — Accept both "rgb" and "image" obs keys
+- `abm_experiment.py` — `--env miniworld` replaces `--env habitat`
+- `setup_cloud.sh` — Simple `pip install miniworld` replaces broken habitat-sim conda flow
+
+---
+
 ## 2026-04-13 22:45 — Fix habitat-sim Python version conflict
 
 ### Fixes

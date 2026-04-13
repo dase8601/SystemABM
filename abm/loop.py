@@ -9,10 +9,10 @@ Three conditions:
   "ppo_only"   — Raw-pixel PPO baseline (no LeWM, no mode switching)
 
 Three environments (env_type):
-  "doorkey" — MiniGrid-DoorKey-6x6 (original, 48×48, 7 actions)
-  "crafter" — Crafter survival game (64×64, 17 actions, 22 achievements)
-  "habitat" — Habitat PointNav (384×384, 4 actions, indoor navigation)
-              Uses V-JEPA 2.1 ViT-B as frozen System A encoder.
+  "doorkey"   — MiniGrid-DoorKey-6x6 (original, 48×48, 7 actions)
+  "crafter"   — Crafter survival game (64×64, 17 actions, 22 achievements)
+  "miniworld" — MiniWorld 3D maze navigation (160×160, 3 actions)
+                Uses V-JEPA 2.1 ViT-B as frozen System A encoder.
 
 Vectorization: N_ENVS parallel environments step simultaneously each outer
 loop iteration, giving N_ENVS transitions per call.  This is the primary
@@ -223,33 +223,31 @@ def eval_crafter(
 
 
 # ---------------------------------------------------------------------------
-# Habitat evaluation
+# MiniWorld evaluation
 # ---------------------------------------------------------------------------
 
-def eval_habitat(
+def eval_miniworld(
     agent:       PPOAgent,
     encoder_fn:  Callable,
     device:      str,
     seed_offset: int = 1000,
     n_eps:       int = 20,
-    simple:      bool = False,
-    scene_path:  str  = None,
-) -> Tuple[float, float]:
+) -> float:
     """
-    Evaluate on Habitat PointNav.
-    Returns: (success_rate, mean_spl)
+    Evaluate on MiniWorld maze navigation.
+    Returns: success_rate (fraction of episodes reaching the goal)
     """
-    from .habitat_env import make_habitat_env
+    from .miniworld_env import make_miniworld_env
 
-    successes = []
-    spls      = []
+    successes = 0
     for ep in range(n_eps):
-        env = make_habitat_env(seed=seed_offset + ep, simple=simple, scene_path=scene_path)
+        env = make_miniworld_env(seed=seed_offset + ep)
         obs, _ = env.reset(seed=seed_offset + ep)
         lstm_state = agent.get_initial_state(1, device)
         done_t = torch.zeros(1, device=device)
         done   = False
         ep_steps = 0
+        ep_ret   = 0.0
 
         while not done and ep_steps < 500:
             with torch.no_grad():
@@ -257,16 +255,18 @@ def eval_habitat(
                 action, _, _, _, lstm_state = agent.get_action_and_value(
                     z, lstm_state, done_t
                 )
-            obs, _, term, trunc, info = env.step(action.item())
+            obs, r, term, trunc, info = env.step(action.item())
             done   = term or trunc
             done_t = torch.tensor([float(done)], device=device)
+            ep_ret  += r
             ep_steps += 1
 
-        successes.append(info.get("success", 0.0))
-        spls.append(info.get("spl", 0.0))
+        # MiniWorld gives +1 reward on goal reach
+        if ep_ret > 0:
+            successes += 1
         env.close()
 
-    return float(np.mean(successes)), float(np.mean(spls))
+    return successes / n_eps
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +279,7 @@ def run_abm_loop(
     max_steps: int = 400_000,
     seed:      int = 42,
     n_envs:    int = N_ENVS,
-    env_type:  str = "doorkey",   # "doorkey" | "crafter" | "habitat"
+    env_type:  str = "doorkey",   # "doorkey" | "crafter" | "miniworld"
 ) -> Dict:
     """
     Run a single condition of the A-B-M experiment.
@@ -291,7 +291,7 @@ def run_abm_loop(
     max_steps : total environment steps
     seed      : random seed
     n_envs    : number of parallel environments
-    env_type  : "doorkey" | "crafter" | "habitat"
+    env_type  : "doorkey" | "crafter" | "miniworld"
 
     Returns
     -------
@@ -321,13 +321,13 @@ def run_abm_loop(
         min_initial_observe = 50_000  # deep first OBSERVE (LeCun: observe then act)
         n_train_steps       = 2       # gradient steps per env step during OBSERVE
         use_vjepa           = False
-    elif env_type == "habitat":
-        from .habitat_env import make_habitat_env, make_habitat_vec_env
-        img_h = img_w       = 384
-        n_actions           = 4       # STOP, FORWARD, LEFT, RIGHT
-        _make_env           = make_habitat_env
-        _make_vec           = lambda n, seed, use_async: make_habitat_vec_env(
-                                  n, seed=seed, use_async=False, simple=True)
+    elif env_type == "miniworld":
+        from .miniworld_env import make_miniworld_env, make_miniworld_vec_env
+        img_h = img_w       = 160
+        n_actions           = 3       # turn_left, turn_right, move_forward
+        _make_env           = make_miniworld_env
+        _make_vec           = lambda n, seed, use_async: make_miniworld_vec_env(
+                                  n, seed=seed, use_async=use_async, img_size=160)
         latent_dim          = 768     # V-JEPA 2.1 ViT-B feature dim
         ppo_rollout         = 128
         eval_interval       = 10_000
@@ -397,7 +397,7 @@ def run_abm_loop(
         ppo     = PPO(agent, lr=PPO_LR)
         buf_ppo = RolloutBuffer(ppo_rollout, n_envs, feat_dim, device, hidden_size=HIDDEN_SIZE)
 
-        # Obs key is "rgb" for habitat (not "image")
+        # V-JEPA encoder handles both "rgb" and "image" keys
         obs_key = "rgb"
 
         def encoder(obs_dict):
@@ -692,13 +692,12 @@ def run_abm_loop(
                 for p in lewm.encoder.parameters():
                     p.requires_grad_(False)
 
-            if env_type == "habitat":
-                sr, spl = eval_habitat(
+            if env_type == "miniworld":
+                sr = eval_miniworld(
                     agent, encoder_single, device,
                     seed_offset=9000 + env_step, n_eps=eval_n_eps,
-                    simple=True,
                 )
-                per_tier = {"spl": spl}
+                per_tier = {}
             elif env_type == "crafter":
                 sr, per_tier = eval_crafter(
                     agent, encoder_single, device,
