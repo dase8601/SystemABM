@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-13 23:50 — Fix V-JEPA weights download URL (localhost → public)
+
+### Fixes
+- `abm/vjepa_encoder.py` — The V-JEPA 2.1 torch.hub repo changed its weight download URL to `localhost:8300` (Meta internal). Now loads architecture with `pretrained=False` and downloads weights directly from `dl.fbaipublicfiles.com/vjepa2/`.
+
+---
+
 ## 2026-04-13 23:40 — Add einops dependency for V-JEPA 2.1
 
 ### Fixes

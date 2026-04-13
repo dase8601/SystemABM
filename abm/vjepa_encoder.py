@@ -18,10 +18,15 @@ Input:  (B, H, W, 3) uint8 RGB or (B, 3, H, W) float32 [0, 1]
 Output: (B, 768) float32 — avg-pooled patch features
 """
 
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+
+
+# Correct public URL — the torch.hub copy may have a broken localhost URL
+VJEPA_WEIGHTS_URL = "https://dl.fbaipublicfiles.com/vjepa2/vjepa2_1_vitb_dist_vitG_384.pt"
 
 
 class VJEPAEncoder:
@@ -46,13 +51,28 @@ class VJEPAEncoder:
         self.device   = device
         self.img_size = img_size
 
-        # Load V-JEPA 2.1 ViT-B (distilled from ViT-G)
-        # Returns (encoder, predictor) — we only use the encoder
+        # Load V-JEPA 2.1 ViT-B architecture (no weights)
+        # Then load weights from the correct public URL ourselves,
+        # because the hub repo's URL sometimes points to localhost (Meta internal).
         self.encoder, _ = torch.hub.load(
             "facebookresearch/vjepa2:main",
             model_name,
-            pretrained=True,
+            pretrained=False,  # don't let hub download weights
         )
+
+        # Download weights from the correct public URL
+        cache_dir = torch.hub.get_dir()
+        ckpt_path = os.path.join(cache_dir, "checkpoints", "vjepa2_1_vitb_dist_vitG_384.pt")
+        if not os.path.exists(ckpt_path):
+            print(f"Downloading V-JEPA 2.1 weights from {VJEPA_WEIGHTS_URL}")
+            torch.hub.download_url_to_file(VJEPA_WEIGHTS_URL, ckpt_path)
+        state_dict = torch.load(ckpt_path, map_location="cpu")
+        # Clean keys: remove "module." or "backbone." prefixes
+        enc_sd = state_dict.get("ema_encoder", state_dict)
+        if isinstance(enc_sd, dict) and any(k.startswith("module.") for k in enc_sd):
+            enc_sd = {k.replace("module.", ""): v for k, v in enc_sd.items()}
+        self.encoder.load_state_dict(enc_sd, strict=False)
+
         self.encoder = self.encoder.to(device).eval()
 
         # Freeze all parameters — never trains
