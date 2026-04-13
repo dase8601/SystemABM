@@ -255,32 +255,40 @@ def run_abm_loop(
     if env_type == "crafter":
         from .crafter_env import make_crafter_env, make_crafter_vec_env
         img_h = img_w = 64
-        n_actions       = 17
-        _make_env       = make_crafter_env
-        _make_vec       = make_crafter_vec_env
-        latent_dim      = 512     # richer visual content needs more capacity
-        ppo_rollout     = 256     # 17 actions → noisier gradient, need larger batch
-        eval_interval   = 10_000  # Crafter eval is expensive
-        eval_n_eps      = 20      # 20 eps × 1K steps each
-        ssl_freeze_thr  = 0.06    # tighter threshold for richer visuals
-        min_sr_to_stay  = 0.40    # tier 1 alone gives ~27%, so 0.03 was way too low
-        solve_threshold = 1.01    # never auto-stop — run full budget
-        use_rnd         = True    # intrinsic reward for sparse Crafter signal
-        rnd_coef        = 0.1     # scale of intrinsic vs extrinsic reward
+        n_actions           = 17
+        _make_env           = make_crafter_env
+        _make_vec           = make_crafter_vec_env
+        latent_dim          = 512     # richer visual content needs more capacity
+        ppo_rollout         = 256     # 17 actions → noisier gradient, need larger batch
+        eval_interval       = 10_000  # Crafter eval is expensive
+        eval_n_eps          = 20      # 20 eps × 1K steps each
+        ssl_freeze_thr      = 0.06    # tighter threshold for richer visuals
+        min_sr_to_stay      = 0.30    # don't switch back to OBSERVE too aggressively
+        solve_threshold     = 1.01    # never auto-stop — run full budget
+        use_rnd             = True    # intrinsic reward for sparse Crafter signal
+        rnd_coef            = 0.1     # scale of intrinsic vs extrinsic reward
+        obs_plateau_steps   = 20_000  # longer OBSERVE phases for visual complexity
+        act_plateau_steps   = 100_000 # long ACT — let PPO train uninterrupted
+        min_initial_observe = 50_000  # deep first OBSERVE (LeCun: observe then act)
+        n_train_steps       = 2       # gradient steps per env step during OBSERVE
     else:  # doorkey
-        img_h = img_w   = IMG_H
-        n_actions       = N_ACTIONS
-        _make_env       = make_doorkey_env
-        _make_vec       = make_doorkey_vec_env
-        latent_dim      = LATENT_DIM
-        ppo_rollout     = PPO_ROLLOUT
-        eval_interval   = EVAL_INTERVAL
-        eval_n_eps      = EVAL_EPISODES
-        ssl_freeze_thr  = 0.08
-        min_sr_to_stay  = 0.30
-        solve_threshold = 0.80
-        use_rnd         = False
-        rnd_coef        = 0.0
+        img_h = img_w       = IMG_H
+        n_actions           = N_ACTIONS
+        _make_env           = make_doorkey_env
+        _make_vec           = make_doorkey_vec_env
+        latent_dim          = LATENT_DIM
+        ppo_rollout         = PPO_ROLLOUT
+        eval_interval       = EVAL_INTERVAL
+        eval_n_eps          = EVAL_EPISODES
+        ssl_freeze_thr      = 0.08
+        min_sr_to_stay      = 0.30
+        solve_threshold     = 0.80
+        use_rnd             = False
+        rnd_coef            = 0.0
+        obs_plateau_steps   = 8_000
+        act_plateau_steps   = 20_000
+        min_initial_observe = 0
+        n_train_steps       = 1       # standard training rate for simple env
 
     logger.info(
         f"[{condition.upper()}] Starting — env={env_type}, device={device}, "
@@ -344,11 +352,12 @@ def run_abm_loop(
     # ── System M ────────────────────────────────────────────────────────────
     if condition == "autonomous":
         sysm = AutonomousSystemM(
-            obs_plateau_steps=8_000,
-            act_plateau_steps=20_000,
+            obs_plateau_steps=obs_plateau_steps,
+            act_plateau_steps=act_plateau_steps,
             plateau_threshold=0.01,
             solve_threshold=solve_threshold,
             min_sr_to_stay=min_sr_to_stay,
+            min_initial_observe=min_initial_observe,
         )
     elif condition == "fixed":
         sysm = FixedSystemM(
@@ -426,12 +435,13 @@ def run_abm_loop(
             env_step += n_envs
 
             ssl_loss_val = None
-            if len(buf_lew) >= LEWM_WARMUP and (env_step // n_envs) % 4 == 0:
-                obs_t, acts, obs_next = buf_lew.sample(LEWM_BATCH, device)
-                opt_lewm.zero_grad()
-                loss, info = lewm.loss(obs_t, acts, obs_next)
-                loss.backward()
-                opt_lewm.step()
+            if len(buf_lew) >= LEWM_WARMUP:
+                for _ in range(n_train_steps):
+                    obs_t, acts, obs_next = buf_lew.sample(LEWM_BATCH, device)
+                    opt_lewm.zero_grad()
+                    loss, info = lewm.loss(obs_t, acts, obs_next)
+                    loss.backward()
+                    opt_lewm.step()
                 ssl_loss_val = info["loss_total"]
                 ssl_ewa = (ssl_loss_val if ssl_ewa is None
                            else 0.95 * ssl_ewa + 0.05 * ssl_loss_val)

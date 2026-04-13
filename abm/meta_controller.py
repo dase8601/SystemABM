@@ -42,11 +42,12 @@ class AutonomousSystemM:
 
     def __init__(
         self,
-        obs_plateau_steps: int   = 8_000,
-        act_plateau_steps: int   = 20_000,
-        plateau_threshold: float = 0.01,
-        solve_threshold:   float = 0.80,
-        min_sr_to_stay:    float = 0.30,
+        obs_plateau_steps:   int   = 8_000,
+        act_plateau_steps:   int   = 20_000,
+        plateau_threshold:   float = 0.01,
+        solve_threshold:     float = 0.80,
+        min_sr_to_stay:      float = 0.30,
+        min_initial_observe: int   = 0,
     ):
         """
         min_sr_to_stay: don't switch back to OBSERVE unless success/score is
@@ -55,12 +56,18 @@ class AutonomousSystemM:
         Raising this from the original 0.20 stops autonomous System M from
         interrupting a well-functioning LSTM-PPO that hasn't yet crossed a
         high threshold but is steadily improving.
+
+        min_initial_observe: force the first OBSERVE phase to run at least
+        this many env steps before any plateau-based switching.  Ensures
+        deep world model training before first ACT phase (LeCun principle:
+        observe deeply, then act efficiently).
         """
-        self.obs_plateau_steps = obs_plateau_steps
-        self.act_plateau_steps = act_plateau_steps
-        self.plateau_threshold = plateau_threshold
-        self.solve_threshold   = solve_threshold
-        self.min_sr_to_stay    = min_sr_to_stay
+        self.obs_plateau_steps   = obs_plateau_steps
+        self.act_plateau_steps   = act_plateau_steps
+        self.plateau_threshold   = plateau_threshold
+        self.solve_threshold     = solve_threshold
+        self.min_sr_to_stay      = min_sr_to_stay
+        self.min_initial_observe = min_initial_observe
 
         self.mode          = Mode.OBSERVE
         self._mode_start   = 0        # env_step when mode last changed
@@ -79,6 +86,10 @@ class AutonomousSystemM:
         # Keep only entries within the plateau window
         cutoff = env_step - self.obs_plateau_steps
         self._ssl_buf = [(s, l) for s, l in self._ssl_buf if s >= cutoff]
+
+        # Force deep first OBSERVE — don't switch until world model is solid
+        if self.n_switches() == 0 and env_step < self.min_initial_observe:
+            return self.mode
 
         time_in = env_step - self._mode_start
         if time_in < self.obs_plateau_steps or len(self._ssl_buf) < 20:
@@ -112,8 +123,9 @@ class AutonomousSystemM:
         if time_in < self.act_plateau_steps:
             return self.mode
 
-        # Need at least 2 eval samples to judge progress
-        recent = [s for _, s in self._sr_buf[-4:]] if self._sr_buf else []
+        # Need at least 2 eval samples to judge progress (8-sample window
+        # smooths out Crafter's noisy eval scores)
+        recent = [s for _, s in self._sr_buf[-8:]] if self._sr_buf else []
         if len(recent) < 2:
             return self.mode
 
