@@ -192,7 +192,153 @@ class LeWM(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# ReplayBuffer
+# VJEPAPredictor — action-conditioned predictor in V-JEPA representation space
+# ---------------------------------------------------------------------------
+
+class VJEPAPredictor(nn.Module):
+    """
+    Action-conditioned next-latent predictor for V-JEPA 2.1 features.
+
+    Unlike the LeWM Predictor which operates on our small CNN encoder's
+    output (256-dim), this operates on V-JEPA 2.1's 768-dim patch features.
+    Larger hidden layers to handle the richer representation space.
+
+    This is what trains during OBSERVE mode — the V-JEPA encoder stays frozen.
+    Prediction error serves as intrinsic reward during ACT mode (replaces RND).
+
+    Usage:
+        predictor = VJEPAPredictor(feature_dim=768, n_actions=4).to(device)
+
+        # OBSERVE: train predictor
+        loss, info = predictor.train_step(z_t, action, z_next)
+
+        # ACT: intrinsic reward
+        intrinsic = predictor.intrinsic_reward(z_t, action, z_next)
+    """
+
+    def __init__(self, feature_dim: int = 768, n_actions: int = 4, hidden: int = 512):
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.n_actions   = n_actions
+
+        self.net = nn.Sequential(
+            nn.Linear(feature_dim + n_actions, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, feature_dim),
+        )
+
+        # Running stats for intrinsic reward normalization
+        self.register_buffer("reward_mean", torch.zeros(1))
+        self.register_buffer("reward_var", torch.ones(1))
+        self._reward_count = 0
+
+    def forward(self, z: torch.Tensor, a_onehot: torch.Tensor) -> torch.Tensor:
+        """Predict z_{t+1} from (z_t, action)."""
+        return self.net(torch.cat([z, a_onehot], dim=-1))
+
+    def loss(self, z_t: torch.Tensor, action: torch.Tensor,
+             z_next: torch.Tensor) -> tuple:
+        """
+        Compute prediction loss in V-JEPA representation space.
+
+        z_t:    (B, feature_dim) — current V-JEPA features
+        action: (B,) int64 — discrete actions
+        z_next: (B, feature_dim) — next V-JEPA features (target, detached)
+
+        Returns: (loss_scalar, info_dict)
+        """
+        a_onehot = F.one_hot(action, self.n_actions).float()
+        z_pred   = self.forward(z_t.detach(), a_onehot)
+        loss     = F.mse_loss(z_pred, z_next.detach())
+
+        return loss, {
+            "predictor_loss": loss.item(),
+            "z_pred_std":     z_pred.std().item(),
+        }
+
+    @torch.no_grad()
+    def intrinsic_reward(self, z_t: torch.Tensor, action: torch.Tensor,
+                         z_next: torch.Tensor) -> torch.Tensor:
+        """
+        Normalized intrinsic reward = prediction error in V-JEPA space.
+
+        High when the world model hasn't learned this transition (novel).
+        Low when the transition is familiar.
+
+        This is semantically richer than RND on raw pixels because novelty
+        is measured in abstract representation space — curious about new
+        game states, not random pixel noise.
+
+        Returns: (B,) float — per-env intrinsic reward
+        """
+        a_onehot = F.one_hot(action, self.n_actions).float()
+        z_pred   = self.forward(z_t, a_onehot)
+        raw      = (z_pred - z_next).pow(2).mean(dim=-1)  # (B,)
+
+        # Update running stats
+        batch_mean = raw.mean()
+        batch_var  = raw.var().clamp(min=1e-8)
+        self._reward_count += 1
+        alpha = max(1.0 / self._reward_count, 0.01)
+        self.reward_mean = (1 - alpha) * self.reward_mean + alpha * batch_mean
+        self.reward_var  = (1 - alpha) * self.reward_var + alpha * batch_var
+
+        return (raw - self.reward_mean) / (self.reward_var.sqrt() + 1e-8)
+
+
+# ---------------------------------------------------------------------------
+# ReplayBuffer (V-JEPA variant — stores pre-computed features)
+# ---------------------------------------------------------------------------
+
+class VJEPAReplayBuffer:
+    """
+    Replay buffer storing (z_t, action, z_next) tuples in V-JEPA feature space.
+    Used to train the VJEPAPredictor during OBSERVE mode.
+
+    Unlike ReplayBuffer which stores raw images, this stores pre-computed
+    V-JEPA features (768-dim vectors) — much more memory efficient.
+    """
+
+    def __init__(self, capacity: int = 50_000, feature_dim: int = 768):
+        self.capacity    = capacity
+        self.feature_dim = feature_dim
+        self._z_t    = np.zeros((capacity, feature_dim), dtype=np.float32)
+        self._action = np.zeros(capacity, dtype=np.int64)
+        self._z_next = np.zeros((capacity, feature_dim), dtype=np.float32)
+        self._ptr    = 0
+        self._size   = 0
+
+    def push(self, z_t: np.ndarray, action: int, z_next: np.ndarray):
+        """Add a single transition. z_t, z_next: (feature_dim,) float32."""
+        self._z_t[self._ptr]    = z_t
+        self._action[self._ptr] = action
+        self._z_next[self._ptr] = z_next
+        self._ptr  = (self._ptr + 1) % self.capacity
+        self._size = min(self._size + 1, self.capacity)
+
+    def push_batch(self, z_t: np.ndarray, actions: np.ndarray, z_next: np.ndarray):
+        """Add a batch of transitions. z_t, z_next: (B, feature_dim)."""
+        B = z_t.shape[0]
+        for i in range(B):
+            self.push(z_t[i], int(actions[i]), z_next[i])
+
+    def sample(self, batch_size: int, device: str):
+        """Returns (z_t, actions, z_next) tensors on device."""
+        idx = np.random.choice(self._size, size=min(batch_size, self._size), replace=False)
+        return (
+            torch.from_numpy(self._z_t[idx]).to(device),
+            torch.from_numpy(self._action[idx]).to(device),
+            torch.from_numpy(self._z_next[idx]).to(device),
+        )
+
+    def __len__(self):
+        return self._size
+
+
+# ---------------------------------------------------------------------------
+# ReplayBuffer (original — stores raw images)
 # ---------------------------------------------------------------------------
 
 class ReplayBuffer:

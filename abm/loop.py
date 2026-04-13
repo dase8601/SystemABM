@@ -8,9 +8,11 @@ Three conditions:
   "fixed"      — FixedSystemM (switch every K steps)
   "ppo_only"   — Raw-pixel PPO baseline (no LeWM, no mode switching)
 
-Two environments (env_type):
+Three environments (env_type):
   "doorkey" — MiniGrid-DoorKey-6x6 (original, 48×48, 7 actions)
   "crafter" — Crafter survival game (64×64, 17 actions, 22 achievements)
+  "habitat" — Habitat PointNav (384×384, 4 actions, indoor navigation)
+              Uses V-JEPA 2.1 ViT-B as frozen System A encoder.
 
 Vectorization: N_ENVS parallel environments step simultaneously each outer
 loop iteration, giving N_ENVS transitions per call.  This is the primary
@@ -34,7 +36,7 @@ import gymnasium
 from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
 from minigrid.wrappers import RGBImgObsWrapper
 
-from .lewm import LeWM, ReplayBuffer
+from .lewm import LeWM, ReplayBuffer, VJEPAPredictor, VJEPAReplayBuffer
 from .ppo import PPO, PPOAgent, RolloutBuffer
 from .meta_controller import AutonomousSystemM, FixedSystemM, Mode
 from .rnd import RND
@@ -221,6 +223,53 @@ def eval_crafter(
 
 
 # ---------------------------------------------------------------------------
+# Habitat evaluation
+# ---------------------------------------------------------------------------
+
+def eval_habitat(
+    agent:       PPOAgent,
+    encoder_fn:  Callable,
+    device:      str,
+    seed_offset: int = 1000,
+    n_eps:       int = 20,
+    simple:      bool = False,
+    scene_path:  str  = None,
+) -> Tuple[float, float]:
+    """
+    Evaluate on Habitat PointNav.
+    Returns: (success_rate, mean_spl)
+    """
+    from .habitat_env import make_habitat_env
+
+    successes = []
+    spls      = []
+    for ep in range(n_eps):
+        env = make_habitat_env(seed=seed_offset + ep, simple=simple, scene_path=scene_path)
+        obs, _ = env.reset(seed=seed_offset + ep)
+        lstm_state = agent.get_initial_state(1, device)
+        done_t = torch.zeros(1, device=device)
+        done   = False
+        ep_steps = 0
+
+        while not done and ep_steps < 500:
+            with torch.no_grad():
+                z = encoder_fn(obs)
+                action, _, _, _, lstm_state = agent.get_action_and_value(
+                    z, lstm_state, done_t
+                )
+            obs, _, term, trunc, info = env.step(action.item())
+            done   = term or trunc
+            done_t = torch.tensor([float(done)], device=device)
+            ep_steps += 1
+
+        successes.append(info.get("success", 0.0))
+        spls.append(info.get("spl", 0.0))
+        env.close()
+
+    return float(np.mean(successes)), float(np.mean(spls))
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -230,7 +279,7 @@ def run_abm_loop(
     max_steps: int = 400_000,
     seed:      int = 42,
     n_envs:    int = N_ENVS,
-    env_type:  str = "doorkey",   # "doorkey" | "crafter"
+    env_type:  str = "doorkey",   # "doorkey" | "crafter" | "habitat"
 ) -> Dict:
     """
     Run a single condition of the A-B-M experiment.
@@ -242,7 +291,7 @@ def run_abm_loop(
     max_steps : total environment steps
     seed      : random seed
     n_envs    : number of parallel environments
-    env_type  : "doorkey" (MiniGrid) or "crafter" (Crafter survival)
+    env_type  : "doorkey" | "crafter" | "habitat"
 
     Returns
     -------
@@ -271,6 +320,29 @@ def run_abm_loop(
         act_plateau_steps   = 100_000 # long ACT — let PPO train uninterrupted
         min_initial_observe = 50_000  # deep first OBSERVE (LeCun: observe then act)
         n_train_steps       = 2       # gradient steps per env step during OBSERVE
+        use_vjepa           = False
+    elif env_type == "habitat":
+        from .habitat_env import make_habitat_env, make_habitat_vec_env
+        img_h = img_w       = 384
+        n_actions           = 4       # STOP, FORWARD, LEFT, RIGHT
+        _make_env           = make_habitat_env
+        _make_vec           = lambda n, seed, use_async: make_habitat_vec_env(
+                                  n, seed=seed, use_async=False, simple=True)
+        latent_dim          = 768     # V-JEPA 2.1 ViT-B feature dim
+        ppo_rollout         = 128
+        eval_interval       = 10_000
+        eval_n_eps          = 20
+        ssl_freeze_thr      = 0.02    # predictor loss threshold
+        min_sr_to_stay      = 0.10    # navigation success is harder
+        solve_threshold     = 1.01    # never auto-stop
+        use_rnd             = False   # predictor error replaces RND
+        rnd_coef            = 0.0
+        obs_plateau_steps   = 30_000  # V-JEPA predictor needs time to learn transitions
+        act_plateau_steps   = 80_000  # long ACT phases for navigation learning
+        min_initial_observe = 40_000  # deep first OBSERVE
+        n_train_steps       = 4       # predictor is lightweight, train intensively
+        use_vjepa           = True    # use V-JEPA 2.1 encoder instead of LeWM CNN
+        intrinsic_coef      = 0.1     # predictor-based intrinsic reward scale
     else:  # doorkey
         img_h = img_w       = IMG_H
         n_actions           = N_ACTIONS
@@ -289,6 +361,7 @@ def run_abm_loop(
         act_plateau_steps   = 20_000
         min_initial_observe = 0
         n_train_steps       = 1       # standard training rate for simple env
+        use_vjepa           = False
 
     logger.info(
         f"[{condition.upper()}] Starting — env={env_type}, device={device}, "
@@ -306,7 +379,49 @@ def run_abm_loop(
     # ── Model setup ─────────────────────────────────────────────────────────
     HIDDEN_SIZE = 256
 
-    if condition == "ppo_only":
+    # V-JEPA encoder (shared across conditions for habitat)
+    vjepa_enc    = None
+    vjepa_pred   = None
+    opt_pred     = None
+    buf_vjepa    = None
+
+    if use_vjepa:
+        # ── V-JEPA 2.1 path (habitat) ──────────────────────────────────────
+        from .vjepa_encoder import VJEPAEncoder
+
+        vjepa_enc = VJEPAEncoder(device=device)
+        feat_dim  = vjepa_enc.feature_dim   # 768 for ViT-B
+        logger.info(f"[{condition.upper()}] V-JEPA 2.1 loaded — feature_dim={feat_dim}")
+
+        agent   = PPOAgent(latent_dim=feat_dim, n_actions=n_actions, hidden=HIDDEN_SIZE).to(device)
+        ppo     = PPO(agent, lr=PPO_LR)
+        buf_ppo = RolloutBuffer(ppo_rollout, n_envs, feat_dim, device, hidden_size=HIDDEN_SIZE)
+
+        # Obs key is "rgb" for habitat (not "image")
+        obs_key = "rgb"
+
+        def encoder(obs_dict):
+            return vjepa_enc.encode(obs_dict)
+
+        def encoder_single(obs_dict):
+            return vjepa_enc.encode_single(obs_dict)
+
+        if condition != "ppo_only":
+            # Action-conditioned predictor (trains during OBSERVE)
+            vjepa_pred = VJEPAPredictor(
+                feature_dim=feat_dim, n_actions=n_actions
+            ).to(device)
+            opt_pred = optim.Adam(vjepa_pred.parameters(), lr=3e-4)
+            buf_vjepa = VJEPAReplayBuffer(capacity=50_000, feature_dim=feat_dim)
+
+        # LeWM not used in V-JEPA path
+        lewm     = None
+        opt_lewm = None
+        buf_lew  = None
+
+    elif condition == "ppo_only":
+        # ── Raw pixel baseline ──────────────────────────────────────────────
+        obs_key  = "image"
         flat_dim = img_h * img_w * 3
         agent    = PPOAgent(latent_dim=flat_dim, n_actions=n_actions, hidden=HIDDEN_SIZE).to(device)
         ppo      = PPO(agent, lr=PPO_LR)
@@ -316,17 +431,19 @@ def run_abm_loop(
         buf_lew  = None
 
         def encoder(obs_dict):
-            imgs = obs_dict["image"]
+            imgs = obs_dict[obs_key]
             x    = torch.from_numpy(imgs.astype(np.float32) / 255.0)
             return x.reshape(len(imgs), -1).to(device)
 
         def encoder_single(obs_dict):
-            img = obs_dict["image"]
+            img = obs_dict[obs_key]
             x   = torch.from_numpy(img.astype(np.float32) / 255.0)
             return x.flatten().unsqueeze(0).to(device)
 
         rnd_input_dim = flat_dim
     else:
+        # ── LeWM CNN path (doorkey / crafter) ───────────────────────────────
+        obs_key  = "image"
         lewm     = LeWM(latent_dim=latent_dim, n_actions=n_actions, img_size=img_h).to(device)
         agent    = PPOAgent(latent_dim=latent_dim, n_actions=n_actions, hidden=HIDDEN_SIZE).to(device)
         ppo      = PPO(agent, lr=PPO_LR)
@@ -342,10 +459,11 @@ def run_abm_loop(
 
         rnd_input_dim = latent_dim
 
-    # ── RND intrinsic reward (Crafter only) ─────────────────────────────────
+    # ── RND intrinsic reward (Crafter only — habitat uses predictor error) ─
     rnd_module = None
     opt_rnd    = None
     if use_rnd:
+        rnd_input_dim = latent_dim if not use_vjepa else vjepa_enc.feature_dim
         rnd_module = RND(input_dim=rnd_input_dim).to(device)
         opt_rnd    = optim.Adam(rnd_module.predictor.parameters(), lr=1e-4)
 
@@ -406,58 +524,98 @@ def run_abm_loop(
 
         # ── OBSERVE step ─────────────────────────────────────────────────────
         if current_mode == Mode.OBSERVE:
-            # If encoder was frozen but System M switched back to OBSERVE,
-            # unfreeze it so the world model can retrain on new data
-            if encoder_frozen and lewm is not None:
-                encoder_frozen = False
-                for p in lewm.encoder.parameters():
-                    p.requires_grad_(True)
-                logger.info(
-                    f"[{condition.upper()}] Encoder unfrozen at step {env_step} "
-                    f"— System M returned to OBSERVE"
+
+            if use_vjepa:
+                # V-JEPA path: collect transitions in feature space,
+                # train action-conditioned predictor
+                actions_np = envs.action_space.sample()
+
+                with torch.no_grad():
+                    z_t = encoder(obs)
+
+                next_obs, _, terms, truncs, infos = envs.step(actions_np)
+
+                with torch.no_grad():
+                    z_next = encoder(next_obs)
+
+                # Store in V-JEPA replay buffer
+                buf_vjepa.push_batch(
+                    z_t.cpu().numpy(),
+                    actions_np if isinstance(actions_np, np.ndarray) else np.array(actions_np),
+                    z_next.cpu().numpy(),
                 )
 
-            actions  = envs.action_space.sample()
-            obs_imgs = obs["image"].copy()
-            next_obs, _, terms, truncs, infos = envs.step(actions)
-            next_imgs = next_obs["image"].copy()
+                obs       = next_obs
+                env_step += n_envs
 
-            final_mask = infos.get("_final_observation", np.zeros(n_envs, dtype=bool))
-            if final_mask.any() and "final_observation" in infos:
+                # Train predictor
+                ssl_loss_val = None
+                if len(buf_vjepa) >= LEWM_WARMUP and vjepa_pred is not None:
+                    for _ in range(n_train_steps):
+                        s_zt, s_act, s_zn = buf_vjepa.sample(LEWM_BATCH, device)
+                        opt_pred.zero_grad()
+                        loss, info = vjepa_pred.loss(s_zt, s_act, s_zn)
+                        loss.backward()
+                        opt_pred.step()
+                    ssl_loss_val = info["predictor_loss"]
+                    ssl_ewa = (ssl_loss_val if ssl_ewa is None
+                               else 0.95 * ssl_ewa + 0.05 * ssl_loss_val)
+
+                if condition == "autonomous" and ssl_loss_val is not None:
+                    sysm.observe_step(ssl_loss_val, env_step)
+
+            else:
+                # LeWM CNN path (doorkey / crafter)
+                if encoder_frozen and lewm is not None:
+                    encoder_frozen = False
+                    for p in lewm.encoder.parameters():
+                        p.requires_grad_(True)
+                    logger.info(
+                        f"[{condition.upper()}] Encoder unfrozen at step {env_step} "
+                        f"— System M returned to OBSERVE"
+                    )
+
+                actions  = envs.action_space.sample()
+                obs_imgs = obs[obs_key].copy()
+                next_obs, _, terms, truncs, infos = envs.step(actions)
+                next_imgs = next_obs[obs_key].copy()
+
+                final_mask = infos.get("_final_observation", np.zeros(n_envs, dtype=bool))
+                if final_mask.any() and "final_observation" in infos:
+                    for i in range(n_envs):
+                        if final_mask[i]:
+                            next_imgs[i] = infos["final_observation"][obs_key][i]
+
                 for i in range(n_envs):
-                    if final_mask[i]:
-                        next_imgs[i] = infos["final_observation"]["image"][i]
+                    buf_lew.push(obs_imgs[i], int(actions[i]), next_imgs[i])
 
-            for i in range(n_envs):
-                buf_lew.push(obs_imgs[i], int(actions[i]), next_imgs[i])
+                obs       = next_obs
+                env_step += n_envs
 
-            obs       = next_obs
-            env_step += n_envs
+                ssl_loss_val = None
+                if len(buf_lew) >= LEWM_WARMUP:
+                    for _ in range(n_train_steps):
+                        obs_t, acts, obs_next = buf_lew.sample(LEWM_BATCH, device)
+                        opt_lewm.zero_grad()
+                        loss, info = lewm.loss(obs_t, acts, obs_next)
+                        loss.backward()
+                        opt_lewm.step()
+                    ssl_loss_val = info["loss_total"]
+                    ssl_ewa = (ssl_loss_val if ssl_ewa is None
+                               else 0.95 * ssl_ewa + 0.05 * ssl_loss_val)
 
-            ssl_loss_val = None
-            if len(buf_lew) >= LEWM_WARMUP:
-                for _ in range(n_train_steps):
-                    obs_t, acts, obs_next = buf_lew.sample(LEWM_BATCH, device)
-                    opt_lewm.zero_grad()
-                    loss, info = lewm.loss(obs_t, acts, obs_next)
-                    loss.backward()
-                    opt_lewm.step()
-                ssl_loss_val = info["loss_total"]
-                ssl_ewa = (ssl_loss_val if ssl_ewa is None
-                           else 0.95 * ssl_ewa + 0.05 * ssl_loss_val)
+                if condition == "autonomous" and ssl_loss_val is not None:
+                    sysm.observe_step(ssl_loss_val, env_step)
 
-            if condition == "autonomous" and ssl_loss_val is not None:
-                sysm.observe_step(ssl_loss_val, env_step)
-
-            if (not encoder_frozen and ssl_ewa is not None
-                    and ssl_ewa < ssl_freeze_thr and condition != "ppo_only"):
-                encoder_frozen = True
-                for p in lewm.encoder.parameters():
-                    p.requires_grad_(False)
-                logger.info(
-                    f"[{condition.upper()}] Encoder frozen at step {env_step} "
-                    f"(ssl_ewa={ssl_ewa:.4f})"
-                )
+                if (not encoder_frozen and ssl_ewa is not None
+                        and ssl_ewa < ssl_freeze_thr and condition != "ppo_only"):
+                    encoder_frozen = True
+                    for p in lewm.encoder.parameters():
+                        p.requires_grad_(False)
+                    logger.info(
+                        f"[{condition.upper()}] Encoder frozen at step {env_step} "
+                        f"(ssl_ewa={ssl_ewa:.4f})"
+                    )
 
         # ── ACT step ─────────────────────────────────────────────────────────
         else:
@@ -477,9 +635,16 @@ def run_abm_loop(
             ep_ret  += rewards
             env_step += n_envs
 
-            # Add RND intrinsic reward for exploration (Crafter)
+            # Intrinsic reward: predictor error (habitat) or RND (crafter)
             combined_rewards = torch.tensor(rewards, dtype=torch.float32, device=device)
-            if rnd_module is not None:
+            if vjepa_pred is not None and use_vjepa:
+                with torch.no_grad():
+                    z_next = encoder(next_obs)
+                    intrinsic = vjepa_pred.intrinsic_reward(
+                        z.detach(), actions, z_next.detach()
+                    )
+                combined_rewards = combined_rewards + intrinsic_coef * intrinsic
+            elif rnd_module is not None:
                 with torch.no_grad():
                     intrinsic = rnd_module.reward(z.detach())
                 combined_rewards = combined_rewards + rnd_coef * intrinsic
@@ -527,7 +692,14 @@ def run_abm_loop(
                 for p in lewm.encoder.parameters():
                     p.requires_grad_(False)
 
-            if env_type == "crafter":
+            if env_type == "habitat":
+                sr, spl = eval_habitat(
+                    agent, encoder_single, device,
+                    seed_offset=9000 + env_step, n_eps=eval_n_eps,
+                    simple=True,
+                )
+                per_tier = {"spl": spl}
+            elif env_type == "crafter":
                 sr, per_tier = eval_crafter(
                     agent, encoder_single, device,
                     seed_offset=9000 + env_step, n_eps=eval_n_eps,
@@ -575,26 +747,22 @@ def run_abm_loop(
     # ── Save checkpoint ──────────────────────────────────────────────────────
     ckpt_dir = Path(f"results/{env_type}")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    if condition == "ppo_only":
-        ckpt = {
-            "condition":  condition,
-            "agent":      agent.state_dict(),
-            "flat_dim":   img_h * img_w * 3,
-            "hidden_size": HIDDEN_SIZE,
-            "env_step":   env_step,
-            "env_type":   env_type,
-        }
-    else:
-        ckpt = {
-            "condition":  condition,
-            "lewm":       lewm.state_dict(),
-            "agent":      agent.state_dict(),
-            "latent_dim": latent_dim,
-            "hidden_size": HIDDEN_SIZE,
-            "n_actions":  n_actions,
-            "env_step":   env_step,
-            "env_type":   env_type,
-        }
+    ckpt = {
+        "condition":   condition,
+        "agent":       agent.state_dict(),
+        "hidden_size": HIDDEN_SIZE,
+        "n_actions":   n_actions,
+        "env_step":    env_step,
+        "env_type":    env_type,
+    }
+    if use_vjepa and vjepa_pred is not None:
+        ckpt["vjepa_predictor"] = vjepa_pred.state_dict()
+        ckpt["feature_dim"]    = vjepa_enc.feature_dim
+    elif condition == "ppo_only":
+        ckpt["flat_dim"] = img_h * img_w * 3
+    elif lewm is not None:
+        ckpt["lewm"]       = lewm.state_dict()
+        ckpt["latent_dim"] = latent_dim
     ckpt_path = ckpt_dir / f"checkpoint_{condition}.pt"
     torch.save(ckpt, ckpt_path)
     logger.info(f"[{condition.upper()}] Checkpoint → {ckpt_path}")

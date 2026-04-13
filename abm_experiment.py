@@ -75,9 +75,15 @@ def plot_learning_curves(results: dict, save_dir: Path, env_type: str) -> Path:
     y_label = ("Achievement Score (fraction of 22 unlocked)"
                if env_type == "crafter" else
                "Success Rate (50-episode eval)")
-    target  = 0.15 if env_type == "crafter" else 0.80
-    target_label = "15% score target" if env_type == "crafter" else "80% target"
-    env_name = "Crafter" if env_type == "crafter" else "MiniGrid-DoorKey-6x6"
+    env_names = {"crafter": "Crafter", "doorkey": "MiniGrid-DoorKey-6x6",
+                  "habitat": "Habitat PointNav"}
+    env_name = env_names.get(env_type, env_type)
+    if env_type == "crafter":
+        target, target_label = 0.15, "15% score target"
+    elif env_type == "habitat":
+        target, target_label = 0.50, "50% nav success target"
+    else:
+        target, target_label = 0.80, "80% target"
 
     for cond, data in results.items():
         steps = data["env_steps"]
@@ -94,12 +100,14 @@ def plot_learning_curves(results: dict, save_dir: Path, env_type: str) -> Path:
     ax.axhline(target, color="red", linestyle="--", lw=1.2, label=target_label)
     ax.set_xlabel("Environment Steps", fontsize=11)
     ax.set_ylabel(y_label, fontsize=11)
+    subtitle = ("V-JEPA 2.1 (80M) + LSTM-PPO" if env_type == "habitat"
+                 else "LeWM (1.5M params) + LSTM-PPO")
     ax.set_title(
         f"A-B-M Loop: Autonomous vs Fixed-Schedule Mode Switching\n"
-        f"{env_name}  |  LeWM (1.5M params) + LSTM-PPO",
+        f"{env_name}  |  {subtitle}",
         fontsize=11,
     )
-    ax.set_ylim(-0.02, 1.05 if env_type != "crafter" else 0.5)
+    ax.set_ylim(-0.02, 1.05 if env_type not in ("crafter",) else 0.5)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.0%}"))
     ax.legend(fontsize=9, loc="upper left")
     ax.grid(alpha=0.3)
@@ -317,8 +325,15 @@ def _img_tag(path: Path, max_width: int = 900) -> str:
 
 def write_report(save_dir: Path, results: dict, plot_paths: dict,
                  env_type: str) -> Path:
-    metric_col = "Steps to 15% score" if env_type == "crafter" else "Steps to 80%"
-    env_name   = "Crafter" if env_type == "crafter" else "MiniGrid-DoorKey-6x6"
+    env_names  = {"crafter": "Crafter", "doorkey": "MiniGrid-DoorKey-6x6",
+                   "habitat": "Habitat PointNav"}
+    env_name   = env_names.get(env_type, env_type)
+    if env_type == "crafter":
+        metric_col = "Steps to 15% score"
+    elif env_type == "habitat":
+        metric_col = "Steps to 50% nav success"
+    else:
+        metric_col = "Steps to 80%"
 
     rows = ""
     for cond in ("autonomous", "fixed", "ppo_only"):
@@ -372,7 +387,7 @@ def write_report(save_dir: Path, results: dict, plot_paths: dict,
   <h1>A-B-M Experiment: Autonomous vs Fixed-Schedule Mode Switching</h1>
   <p>
     Empirical test of the Dupoux/LeCun/Malik A-B-M architecture (arXiv 2603.15381)
-    on <b>{env_name}</b>.  System A = LeWM (~1.5M params, trains from pixels).
+    on <b>{env_name}</b>.  {"System A = V-JEPA 2.1 ViT-B (80M params, frozen pretrained encoder) + action-conditioned predictor." if env_type == "habitat" else "System A = LeWM (~1.5M params, trains from pixels)."}
     System B = LSTM-PPO.  System M = autonomous plateau-detect FSM vs fixed-schedule timer.
   </p>
   <div class="card">
@@ -418,8 +433,9 @@ def main():
                         help="Single condition to run")
     parser.add_argument("--all",    action="store_true", help="Run all three conditions")
     parser.add_argument("--device", default="auto",       help="auto | mps | cpu | cuda")
-    parser.add_argument("--env",    default="doorkey",    choices=["doorkey", "crafter"],
-                        help="Environment: doorkey (MiniGrid) or crafter")
+    parser.add_argument("--env",    default="doorkey",
+                        choices=["doorkey", "crafter", "habitat"],
+                        help="Environment: doorkey | crafter | habitat")
     parser.add_argument("--steps",  type=int, default=800_000)
     parser.add_argument("--seed",   type=int, default=42)
     parser.add_argument("--n-envs", type=int, default=16)
