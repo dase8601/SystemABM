@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-14 00:00 — Fix V-JEPA 5D video input + weight loading
+
+### Fixes
+- `abm/vjepa_encoder.py` — V-JEPA 2.1 expects 5D video tensors `(B, C, T, H, W)`. Added `unsqueeze(2)` to insert `T=1` temporal dimension for single-frame encoding. Fixed state_dict loading to match hub's `_clean_backbone_key` (extract `ema_encoder`, strip `module.`/`backbone.` prefixes). Added `weights_only=False` to suppress torch.load warning.
+
+---
+
 ## 2026-04-13 23:50 — Fix V-JEPA weights download URL (localhost → public)
 
 ### Fixes

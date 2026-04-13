@@ -62,16 +62,19 @@ class VJEPAEncoder:
 
         # Download weights from the correct public URL
         cache_dir = torch.hub.get_dir()
+        os.makedirs(os.path.join(cache_dir, "checkpoints"), exist_ok=True)
         ckpt_path = os.path.join(cache_dir, "checkpoints", "vjepa2_1_vitb_dist_vitG_384.pt")
         if not os.path.exists(ckpt_path):
             print(f"Downloading V-JEPA 2.1 weights from {VJEPA_WEIGHTS_URL}")
             torch.hub.download_url_to_file(VJEPA_WEIGHTS_URL, ckpt_path)
-        state_dict = torch.load(ckpt_path, map_location="cpu")
-        # Clean keys: remove "module." or "backbone." prefixes
-        enc_sd = state_dict.get("ema_encoder", state_dict)
-        if isinstance(enc_sd, dict) and any(k.startswith("module.") for k in enc_sd):
-            enc_sd = {k.replace("module.", ""): v for k, v in enc_sd.items()}
-        self.encoder.load_state_dict(enc_sd, strict=False)
+        state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        # Extract encoder weights and clean keys (same as hub's _clean_backbone_key)
+        enc_sd = state_dict["ema_encoder"]
+        cleaned = {}
+        for k, v in enc_sd.items():
+            k = k.replace("module.", "").replace("backbone.", "")
+            cleaned[k] = v
+        self.encoder.load_state_dict(cleaned, strict=False)
 
         self.encoder = self.encoder.to(device).eval()
 
@@ -84,8 +87,9 @@ class VJEPAEncoder:
         self._std  = self.STD.to(device)
 
         # Determine feature dimension by dry run
+        # V-JEPA expects 5D video input: (B, C, T, H, W) — use T=1 for single frames
         with torch.no_grad():
-            dummy = torch.zeros(1, 3, img_size, img_size, device=device)
+            dummy = torch.zeros(1, 3, 1, img_size, img_size, device=device)
             out = self.encoder(dummy)
             if out.ndim == 3:
                 # (B, num_patches, embed_dim)
@@ -98,16 +102,18 @@ class VJEPAEncoder:
 
     def _preprocess(self, imgs: torch.Tensor) -> torch.Tensor:
         """
-        Resize to 384x384 and normalize.
+        Resize to 384x384, normalize, and add temporal dim for V-JEPA.
         Input: (B, 3, H, W) float32 [0, 1]
-        Output: (B, 3, 384, 384) float32 normalized
+        Output: (B, 3, 1, 384, 384) float32 normalized — T=1 for single frames
         """
         if imgs.shape[-2:] != (self.img_size, self.img_size):
             imgs = F.interpolate(
                 imgs, size=(self.img_size, self.img_size),
                 mode="bilinear", align_corners=False,
             )
-        return (imgs - self._mean) / self._std
+        imgs = (imgs - self._mean) / self._std
+        # Add temporal dimension: (B, C, H, W) → (B, C, 1, H, W)
+        return imgs.unsqueeze(2)
 
     def _obs_to_tensor(self, obs_dict: dict) -> torch.Tensor:
         """
