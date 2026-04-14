@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-04-14 02:00 — DINOv3 ViT-B/16 via torch.hub (public, no auth)
+
+### Why
+DINOv3 via HuggingFace transformers was gated (401). Root cause: we used the HF model
+card URL. Fix: use torch.hub with GitHub source + weights from dl.fbaipublicfiles.com —
+both public, no authentication required.
+
+### Changes
+- `abm/vjepa_encoder.py` — Rewrite for DINOv3 via `torch.hub.load('facebookresearch/dinov3',
+  'dinov3_vitb16', pretrained=True)`. API identical to DINOv2: `forward_features(x)["x_norm_clstoken"]`.
+  Input 224×224, output 768-dim L2-normalized CLS token. Weights: LVD1689M (1.7B images).
+- `abm/loop.py` — Update log message to DINOv3.
+
+---
+
 ## 2026-04-14 01:45 — Revert DINOv3 → DINOv2 (gated HuggingFace repo)
 
 DINOv3 requires manual HuggingFace approval (401 Unauthorized). Reverting
