@@ -117,17 +117,26 @@ class VJEPAEncoder:
                 self.feature_dim = out.shape[-1]
                 self.num_patches = 1
 
-            # Sanity check: random noise input should produce varied features
-            noise = torch.randn(2, 3, 1, img_size, img_size, device=device)
-            feat = self.encoder(noise)
+            # Sanity check: different inputs should produce different features
+            # Test with both random noise AND structured images (black vs white)
+            black = torch.zeros(1, 3, 1, img_size, img_size, device=device)
+            white = torch.ones(1, 3, 1, img_size, img_size, device=device)
+            noise1 = torch.randn(1, 3, 1, img_size, img_size, device=device)
+            noise2 = torch.randn(1, 3, 1, img_size, img_size, device=device)
+            all_inputs = torch.cat([black, white, noise1, noise2], dim=0)
+            feat = self.encoder(all_inputs)
             if feat.ndim == 3:
-                feat = feat.mean(dim=1)
-            cos_sim = F.cosine_similarity(feat[0:1], feat[1:2]).item()
+                feat = feat.mean(dim=1)  # (4, 768)
+            bw_sim = F.cosine_similarity(feat[0:1], feat[1:2]).item()
+            noise_sim = F.cosine_similarity(feat[2:3], feat[3:4]).item()
             feat_std = feat.std().item()
-            print(f"  Feature sanity: dim={self.feature_dim}, std={feat_std:.4f}, "
-                  f"cos_sim(2 random inputs)={cos_sim:.4f}")
-            if feat_std < 0.001:
-                print("  WARNING: Near-zero feature variance — weights likely not loaded!")
+            per_sample_std = feat.std(dim=0).mean().item()
+            print(f"  Feature sanity: dim={self.feature_dim}")
+            print(f"    overall_std={feat_std:.4f}, cross_sample_std={per_sample_std:.4f}")
+            print(f"    cos_sim(black,white)={bw_sim:.4f}, cos_sim(noise1,noise2)={noise_sim:.4f}")
+            if bw_sim > 0.99:
+                print("  WARNING: Black and white images produce nearly identical features!")
+                print("  The encoder may not be discriminative for RL.")
 
     def _preprocess(self, imgs: torch.Tensor) -> torch.Tensor:
         """
