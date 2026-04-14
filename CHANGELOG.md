@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-04-14 01:45 — Revert DINOv3 → DINOv2 (gated HuggingFace repo)
+
+DINOv3 requires manual HuggingFace approval (401 Unauthorized). Reverting
+to DINOv2 which is freely available, already confirmed discriminative
+(cos_sim(black,white)=0.62), and ready to run.
+
+---
+
 ## 2026-04-14 01:30 — Upgrade DINOv2 → DINOv3 ViT-B/16
 
 ### Why
