@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-04-14 02:15 — Final encoder: DINOv2 ViT-B/14 (DINOv3 weights 403 Forbidden)
+
+DINOv3 fully gated — 403 at both HuggingFace and dl.fbaipublicfiles.com.
+DINOv2: public weights, confirmed discriminative (cos_sim black/white=0.62),
+Yann calls it "the best image encoder we have." Final encoder for Paper 2.
+
+---
+
 ## 2026-04-14 02:00 — DINOv3 ViT-B/16 via torch.hub (public, no auth)
 
 ### Why
