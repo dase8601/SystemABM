@@ -340,17 +340,22 @@ def write_report(save_dir: Path, results: dict, plot_paths: dict,
         d = results.get(cond)
         if d is None:
             continue
-        s80  = d.get("steps_to_80pct")
-        sr80 = f"{s80:,}" if s80 else "not reached"
-        n_sw = d.get("n_switches", 0)
-        t    = d.get("total_time_s", 0)
-        peak = max(d["success_rate"]) if d["success_rate"] else 0
+        s80      = d.get("steps_to_80pct")
+        sr80     = f"{s80:,}" if s80 else "not reached"
+        n_sw     = d.get("n_switches", 0)
+        t        = d.get("total_time_s", 0)
+        peak     = max(d["success_rate"]) if d["success_rate"] else 0
+        a_steps  = d.get("act_steps", 0)
+        o_steps  = d.get("observe_steps", 0)
+        total_s  = a_steps + o_steps
+        act_pct  = f"{a_steps/total_s:.0%}" if total_s > 0 else "—"
         rows += f"""
         <tr>
           <td><b>{LABELS[cond].replace(chr(10),' ')}</b></td>
           <td>{sr80}</td>
           <td>{peak:.1%}</td>
           <td>{n_sw}</td>
+          <td>{a_steps:,} ({act_pct})</td>
           <td>{t:.0f}s</td>
         </tr>"""
 
@@ -393,7 +398,7 @@ def write_report(save_dir: Path, results: dict, plot_paths: dict,
   <div class="card">
     <h2>Results Summary</h2>
     <table>
-      <tr><th>Condition</th><th>{metric_col}</th><th>Peak score</th><th>Mode switches</th><th>Wall time</th></tr>
+      <tr><th>Condition</th><th>{metric_col}</th><th>Peak score</th><th>Mode switches</th><th>ACT steps (% of budget)</th><th>Wall time</th></tr>
       {rows}
     </table>
   </div>
@@ -509,9 +514,14 @@ def main():
     for cond, data in all_results.items():
         s80  = data.get("steps_to_80pct")
         peak = max(data["success_rate"]) if data["success_rate"] else 0
+        a_steps = data.get("act_steps", 0)
+        o_steps = data.get("observe_steps", 0)
+        total_s = a_steps + o_steps
+        act_pct = f"{a_steps/total_s:.0%}" if total_s > 0 else "—"
         logger.info(
             f"  {cond:12s}: steps_to_80={s80 or 'N/A':>7}  |  "
-            f"peak={peak:.1%}  |  switches={data.get('n_switches', 0)}"
+            f"peak={peak:.1%}  |  switches={data.get('n_switches', 0)}  |  "
+            f"act_steps={a_steps:,} ({act_pct})"
         )
 
 

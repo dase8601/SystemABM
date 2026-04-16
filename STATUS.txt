@@ -1,0 +1,251 @@
+================================================================================
+  PAPER 2 STATUS — AMI Labs (Dallas Sellers)
+  A-B-M Architecture + JEPA Encoder on 3D Navigation (MiniWorld)
+  Last updated: 2026-04-14
+================================================================================
+
+
+THE THESIS
+----------
+"Real intelligence starts in the world, not language."
+  — Dupoux / LeCun / Malik 2026
+
+The claim: a frozen JEPA-class encoder (pretrained on passive observation,
+no pixel reconstruction) + action-conditioned world model predictor +
+autonomous mode switching will outperform raw RL on 3D visual navigation.
+
+Paper 1 proved the switching mechanism works (DoorKey: 70% > 62% > 24%).
+Paper 2 proves pretrained abstract representations give a measurable advantage.
+
+Yann LeCun direct quotes (Adam Brown interview, 2026) that validate our work:
+
+  "The system learns an abstract representation of what it observes and it
+  makes prediction in that abstract representation space. This is really
+  the way humans and animals function."
+
+  "It will not be LLM. It will not be generative models that predict discrete
+  tokens. It will be models that learn abstract representations and make
+  predictions in abstract representations and can reason about what is going
+  to be the effect of me taking this action."
+
+  "DINOv2 is probably the best image encoder that we have at the moment."
+  — THIS IS OUR SYSTEM A ENCODER. Yann's own words confirm thesis alignment.
+
+
+WHAT WE BUILT
+-------------
+
+System A — Frozen JEPA Encoder + World Model Predictor
+  Encoder: DINOv2 ViT-B/14
+    - 86M params, 768-dim CLS token, L2-normalized
+    - Input: 160x160 RGB -> resized to 224x224 -> ImageNet normalized
+    - Output: 768-dim float32 via forward_features(x)["x_norm_clstoken"]
+    - Loaded: torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14", pretrained=True)
+    - Feature quality confirmed: cos_sim(black,white) = 0.6195 (discriminative)
+    - Code: abm/vjepa_encoder.py
+
+  Predictor (VJEPAPredictor): action-conditioned MLP (768+3 -> 512 -> 512 -> 768)
+    - Trained during OBSERVE phase: given (z_t, a_t), predict z_{t+1}
+    - Prediction error = intrinsic reward during ACT phase
+    - Code: abm/lewm.py
+
+System B — PPO Reinforcement Learning
+  - Standard PPO on 768-dim DINOv2 features
+  - RND (Random Network Distillation) exploration bonus in standalone conditions
+
+System M — Autonomous Meta-Controller
+  - FSM: OBSERVE mode <-> ACT mode
+  - Switch OBSERVE->ACT: when ssl_ewa drops (predictor converged)
+  - Switch ACT->OBSERVE: when extrinsic reward plateau detected
+  - Code: abm/loop.py
+
+Environment — MiniWorld-MazeS3
+  - 3D procedurally generated maze, first-person ego-centric RGB 160x160
+  - 3 discrete actions: turn left, turn right, move forward
+  - 16 parallel envs via SyncVectorEnv (NOT AsyncVectorEnv — see below)
+  - Code: abm/miniworld_env.py
+
+
+WHAT WE TRIED AND WHY WE CHANGED
+---------------------------------
+
+V-JEPA 2.1 ViT-B (original encoder — FAILED)
+  - Loaded correctly: 158/158 keys matched, no errors
+  - Problem: cos_sim(black,white) = 0.9969 — complete feature collapse
+  - Root cause: mean pooling 576 patches creates massive anisotropy in 768-dim
+    space. Every image maps to roughly the same direction regardless of content.
+  - Result: 350K training steps at 0-5% success, predictor loss flat at 0.007
+  - Attempted fix: max pool + L2 normalize -> cos_sim still 0.9969. No help.
+  - Conclusion: V-JEPA single-frame image mode architecturally unsuitable for RL.
+
+DINOv3 ViT-B/16 (attempted upgrade — BLOCKED)
+  - Tried HuggingFace transformers -> 401 Unauthorized (gated, needs Meta approval)
+  - Tried torch.hub -> GitHub code downloads fine, but weights at
+    dl.fbaipublicfiles.com return 403 Forbidden. Fully gated.
+  - Reverted to DINOv2 permanently.
+
+DINOv2 ViT-B/14 (final encoder — WORKING)
+  - cos_sim(black,white) = 0.6195 — strongly discriminative
+  - IS a JEPA-class method: self-supervised, no pixel reconstruction, 1.2B images
+    of passive observation, joint embedding (self-distillation + local/global crop)
+  - Zero changes to VJEPAPredictor (same 768-dim feature_dim)
+
+Habitat-sim (environment candidate — DEFERRED to Paper 3)
+  - Requires 10-30 min C++ compilation on RunPod + habitat-lab (not downloaded)
+  - MiniWorld handles Papers 1-2. Habitat is Paper 3.
+
+
+INFRASTRUCTURE BUILT
+--------------------
+
+  Component          Solution                       Why
+  -----------------  -----------------------------  ---------------------------
+  3D nav env         MiniWorld-MazeS3               pip-installable, no compile
+  Headless rendering Xvfb :1 + DISPLAY=:1           OpenGL on GPU server
+  Vec env            SyncVectorEnv only             Async forks 16 procs -> X crash
+  Encoder            DINOv2 ViT-B/14 torch.hub      Public weights, JEPA-class
+  Overnight runs     tmux session                   SSH disconnect-safe
+  Setup              bash setup_cloud.sh            One-shot RunPod/Colab setup
+
+setup_cloud.sh installs:
+  System: libglu1-mesa-dev libgl1-mesa-dev freeglut3-dev xvfb
+  Python: torch torchvision (CUDA 12.1), minigrid, gymnasium, numpy, matplotlib
+  MiniWorld stack: miniworld omegaconf timm Pillow einops transformers
+
+
+EXPERIMENTAL CONDITIONS
+-----------------------
+
+  #  Condition               System A                System B         System M
+  -  ----------------------  ----------------------  ---------------  ----------
+  1  Autonomous A-B-M        DINOv2 + predictor      PPO on 768-dim   FSM auto
+  2  Fixed A-B-M             DINOv2 + predictor      PPO on 768-dim   Fixed 10K
+  3  PPO + DINOv2            DINOv2 frozen only       PPO + RND        None
+  4  PPO raw pixels          None                    PPO + RND        None
+
+Key comparisons:
+  1 > 2: autonomous switching beats fixed
+  2 > 3: predictor (world model) adds value
+  3 > 4: JEPA features beat raw pixels
+
+
+RESULTS SO FAR
+--------------
+
+Paper 1 (DoorKey — COMPLETE)
+  Autonomous A-B-M:  70% success
+  Fixed A-B-M:       62% success
+  PPO baseline:      24% success
+  -> Autonomous switching significantly outperforms fixed switching and raw RL.
+
+Paper 2 — MiniWorld (IN PROGRESS as of 2026-04-14 ~03:00)
+  Running overnight on RunPod A100 in tmux session "abm"
+  At ~110K of 500K steps:
+    AUTONOMOUS: 25% peak success at step 70K
+    (vs 0-5% for 350K steps with broken V-JEPA encoder)
+    First OBSERVE->ACT mode switch occurred at step 60K (predictor converged)
+    ssl_ewa = 0.0001 (predictor is learning)
+
+  DINOv2 fix confirmed working — this is a massive improvement.
+
+
+WHAT WE ARE CURRENTLY DOING
+----------------------------
+
+All 4 conditions running sequentially on RunPod A100 overnight.
+Expected total runtime: 6-8 hours for 500K steps per condition.
+
+To check progress:
+  tmux attach -t abm
+  # or non-interactively:
+  tail -f results/miniworld/autonomous_log.txt
+
+Outputs when done:
+  results/miniworld/   — per-condition CSV logs + PNG learning curves
+  results/report.html  — comparison dashboard
+
+
+NEXT STEPS (after experiment completes)
+---------------------------------------
+
+Step 1: Analyze results
+  - Open results/report.html in browser
+  - Learning curves: AUTONOMOUS should peak highest, PPO-pixels lowest
+  - Key metric: max success rate + sample efficiency (steps to 50%)
+  - If AUTONOMOUS < FIXED: mode switch timing may need tuning
+  - If PPO+DINOv2 < PPO-pixels: investigate why JEPA features aren't helping
+
+Step 2: Write Paper 2
+  Narrative arc:
+  1. Motivation: Yann's interview — LLMs fail on continuous real-world data.
+     Abstract representations + predictions in abstract space = the future.
+  2. Architecture: A-B-M loop. System A (DINOv2=JEPA-class), B (PPO), M (FSM).
+  3. Results: 4-condition ablation on MiniWorld-MazeS3.
+  4. Conclusion: JEPA encoder + autonomous switching > raw RL.
+     Confirms Paper 1 generalizes to 3D navigation.
+
+  Key quotes for framing:
+  - Yann: "learn abstract representations and make predictions in abstract
+    representations" — this is our architecture exactly
+  - Paper 1: 70% > 62% > 24% — cite as prior work
+  - DINOv2: "probably the best image encoder we have" — this IS System A
+
+Step 3: Paper 3 candidates
+  - Habitat PointNav (more realistic navigation, once habitat-lab sorted)
+  - DROID-100 robot video (real manipulation data)
+  - Multi-task generalization (train on one env, transfer to another)
+
+
+CRITICAL FILES
+--------------
+
+  abm/vjepa_encoder.py   DINOv2 frozen encoder — final version, do not modify
+  abm/lewm.py            VJEPAPredictor + VJEPAReplayBuffer
+  abm/loop.py            Main training loop, FSM meta-controller, eval
+  abm/miniworld_env.py   MiniWorld-MazeS3 Gymnasium wrapper
+  abm_experiment.py      Entry point, condition runner, plots
+  setup_cloud.sh         One-shot RunPod setup
+  CHANGELOG.md           Timestamped record of every code change
+
+
+SANITY CHECKS (run before any new experiment)
+---------------------------------------------
+
+  # 1. Verify DINOv2 encoder is discriminative
+  python -c "
+  from abm.vjepa_encoder import VJEPAEncoder
+  enc = VJEPAEncoder(device='cuda')
+  # Expect: cos_sim(black,white)=0.6195 — Features are discriminative
+  "
+
+  # 2. Verify MiniWorld renders headlessly
+  export DISPLAY=:1
+  python -c "
+  from abm.miniworld_env import make_miniworld_env
+  envs = make_miniworld_env(n_envs=1)
+  obs, _ = envs.reset()
+  print('obs shape:', obs['rgb'].shape)  # expect (1, 160, 160, 3)
+  "
+
+  # 3. Full experiment
+  export DISPLAY=:1
+  python abm_experiment.py --all --device auto --env miniworld --steps 500000
+
+
+KEY INSIGHT FOR THE PAPER
+--------------------------
+
+V-JEPA failed and DINOv2 succeeded — not because V-JEPA is bad, but because of
+a mismatch between architecture and use case. V-JEPA was designed to model temporal
+dynamics across video frames. In single-frame image mode, its patch features all
+activate similarly regardless of content (anisotropy). DINOv2 was explicitly
+trained on single-image discrimination via local/global crop self-distillation.
+
+This IS the JEPA thesis in action: the right abstract representation for the task
+matters. DINOv2, trained on 1.2B images of passive observation, produces the
+abstract spatial representations that support downstream navigation reasoning.
+
+Yann: "We find abstractions that allow us to make predictions while ignoring all
+the details we cannot predict." DINOv2's CLS token is that abstraction.
+
+================================================================================

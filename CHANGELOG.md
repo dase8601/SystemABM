@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-04-15 — Add act_steps / observe_steps tracking for experimental fairness
+
+### Why
+Ryan (PhD ME) raised a valid scientific critique: if autonomous condition spent far
+fewer steps in ACT mode than fixed, the comparison is unfair (less PPO training).
+Need to report ACT-phase step counts alongside success rates in Paper 2.
+
+### Changes
+- `abm/loop.py` — Add `act_steps` and `observe_steps` counters, incremented in
+  each respective branch. Logged at every eval checkpoint. Returned in metrics dict.
+- `abm_experiment.py` — HTML report table and terminal summary now show
+  `act_steps (% of total budget)` per condition.
+
+---
+
 ## 2026-04-14 02:15 — Final encoder: DINOv2 ViT-B/14 (DINOv3 weights 403 Forbidden)
 
 DINOv3 fully gated — 403 at both HuggingFace and dl.fbaipublicfiles.com.

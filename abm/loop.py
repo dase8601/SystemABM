@@ -499,6 +499,8 @@ def run_abm_loop(
     steps_to_80      = None
     env_step         = 0
     encoder_frozen   = False
+    act_steps        = 0   # env steps spent in ACT mode (for fairness analysis)
+    observe_steps    = 0   # env steps spent in OBSERVE mode
 
     ep_ret    = np.zeros(n_envs, dtype=np.float32)
     last_done = np.zeros(n_envs, dtype=bool)
@@ -545,8 +547,9 @@ def run_abm_loop(
                     z_next.cpu().numpy(),
                 )
 
-                obs       = next_obs
-                env_step += n_envs
+                obs           = next_obs
+                env_step     += n_envs
+                observe_steps += n_envs
 
                 # Train predictor
                 ssl_loss_val = None
@@ -589,8 +592,9 @@ def run_abm_loop(
                 for i in range(n_envs):
                     buf_lew.push(obs_imgs[i], int(actions[i]), next_imgs[i])
 
-                obs       = next_obs
-                env_step += n_envs
+                obs           = next_obs
+                env_step     += n_envs
+                observe_steps += n_envs
 
                 ssl_loss_val = None
                 if len(buf_lew) >= LEWM_WARMUP:
@@ -631,9 +635,10 @@ def run_abm_loop(
                 )
 
             next_obs, rewards, terms, truncs, _ = envs.step(actions.cpu().numpy())
-            dones    = terms | truncs
-            ep_ret  += rewards
+            dones     = terms | truncs
+            ep_ret   += rewards
             env_step += n_envs
+            act_steps += n_envs
 
             # Intrinsic reward: predictor error (habitat) or RND (crafter)
             combined_rewards = torch.tensor(rewards, dtype=torch.float32, device=device)
@@ -722,6 +727,7 @@ def run_abm_loop(
             logger.info(
                 f"[{condition.upper()}] step={env_step:7d} | mode={mode_str:12s} | "
                 f"success={sr:.1%} | ssl_ewa={ssl_ewa or 0.0:.4f} | "
+                f"act_steps={act_steps:7d} | obs_steps={observe_steps:7d} | "
                 f"switches={n_sw}{frozen_tag}{tier_str} | {elapsed:.0f}s"
             )
 
@@ -779,4 +785,6 @@ def run_abm_loop(
         "n_switches":     sysm.n_switches() if sysm else 0,
         "switch_log":     sysm.switch_log if sysm else [],
         "total_time_s":   elapsed_total,
+        "act_steps":      act_steps,
+        "observe_steps":  observe_steps,
     }
