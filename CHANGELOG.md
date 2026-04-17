@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-04-17 — Option A: Fix goal specification — DINO-WM style explicit goal image
+
+### Why
+Paper 3 MPC experiment (all 4 conditions scored 20-30%) showed MPC was never
+actually planning. GoalBuffer was empty — random exploration rarely reaches the
+goal — so MPC fell back to random actions every step. We were testing broken MPC,
+not Yann's approach.
+
+Yann (Harvard 2026): "You can show that you can use this to get a robot to
+accomplish a task zero shot. There's no training whatsoever. No RL."
+This requires an explicit goal image. We weren't providing one.
+
+### Changes
+- `abm/miniworld_env.py` — Add `get_goal_obs()` method to `MiniWorldNavEnv`.
+  Teleports agent to face the goal box (inner.box), captures DINOv2-ready
+  observation from agent's perspective, restores agent state. No side effects.
+- `abm/loop.py` — Pre-seed GoalBuffer before training loop starts. Creates n_envs
+  temporary envs (one per training seed), captures goal encoding from each,
+  pushes to goal_buf. MPC has valid z_goal from step 0, not after accidental discovery.
+- `abm/loop.py` / `eval_miniworld_mpc` — Per-episode goal in eval. Each eval episode
+  calls `env.get_goal_obs()` after reset to capture that maze's specific goal
+  (eval seeds differ from training seeds, so positions vary). Falls back to
+  goal_buf only if teleport fails.
+
+---
+
 ## 2026-04-16 — Paper 3 pivot: Replace PPO with Random Shooting MPC (DINO-WM style)
 
 ### Why

@@ -121,6 +121,38 @@ class MiniWorldNavEnv(gymnasium.Env):
         obs, reward, term, trunc, info = self._env.step(int(action))
         return self._process_obs(obs), float(reward), bool(term), bool(trunc), info
 
+    def get_goal_obs(self) -> "dict | None":
+        """
+        Teleport agent to face the goal box, capture observation, restore state.
+        Called once per episode to provide a reliable z_goal for MPC planning.
+        This is the DINO-WM approach: always provide an explicit goal image.
+        Returns processed obs dict (same format as step/reset) or None if unavailable.
+        """
+        import math
+        inner = self._env.unwrapped
+        if not hasattr(inner, "box") or not hasattr(inner, "agent"):
+            return None
+
+        agent = inner.agent
+        box   = inner.box
+
+        # Save agent state
+        saved_pos = agent.pos.copy()
+        saved_dir = agent.dir
+
+        # Place agent ~0.8 units in front of goal box, facing it
+        agent.pos     = box.pos.copy()
+        agent.pos[2] += 0.8
+        agent.dir     = math.pi
+
+        goal_obs = inner.render_obs()
+
+        # Restore agent state — no side effects on the episode
+        agent.pos = saved_pos
+        agent.dir = saved_dir
+
+        return self._process_obs(goal_obs)
+
     def render(self):
         return self._env.render()
 

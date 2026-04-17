@@ -290,12 +290,21 @@ def eval_miniworld_mpc(
     """
     from .miniworld_env import make_miniworld_env
 
-    z_goal = goal_buf.get_goal() if goal_buf is not None else None  # (1, 768) or None
-
     successes = 0
     for ep in range(n_eps):
         env = make_miniworld_env(seed=seed_offset + ep)
         obs, _ = env.reset(seed=seed_offset + ep)
+
+        # Per-episode goal: teleport to this maze's specific goal, encode, restore.
+        # Eval seeds differ from training seeds so goal position varies — must
+        # capture per-episode rather than reusing the training goal buffer.
+        _goal_raw = env.get_goal_obs()
+        if _goal_raw is not None:
+            with torch.no_grad():
+                z_goal = vjepa_enc.encode_single(_goal_raw)
+        else:
+            z_goal = goal_buf.get_goal() if goal_buf is not None else None
+
         done     = False
         ep_steps = 0
         ep_ret   = 0.0
@@ -567,6 +576,29 @@ def run_abm_loop(
     ep_ret    = np.zeros(n_envs, dtype=np.float32)
     last_done = np.zeros(n_envs, dtype=bool)
     lstm_state = agent.get_initial_state(n_envs, device) if agent is not None else None
+
+    # ── Pre-seed goal buffer with explicit goal encodings (DINO-WM style) ────
+    # "Here is the state of the world at time T, here is an action, here is
+    #  what the world will look like." — Yann LeCun, Harvard 2026
+    # Don't wait for accidental goal discoveries. Teleport to goal in each
+    # training env, encode with DINOv2, populate goal_buf from step 0.
+    if use_vjepa and goal_buf is not None and env_type == "miniworld":
+        from .miniworld_env import make_miniworld_env as _make_single
+        logger.info(f"[{condition.upper()}] Pre-seeding goal buffer ({n_envs} envs)...")
+        _seeded = 0
+        for _s in range(seed, seed + n_envs):
+            _tmp = _make_single(seed=_s)
+            _tmp.reset(seed=_s)
+            _goal_raw = _tmp.get_goal_obs()
+            _tmp.close()
+            if _goal_raw is not None:
+                with torch.no_grad():
+                    _z_g = vjepa_enc.encode_single(_goal_raw)
+                goal_buf.push(_z_g)
+                _seeded += 1
+        logger.info(
+            f"[{condition.upper()}] Goal buffer pre-seeded: {_seeded}/{n_envs} goals"
+        )
 
     # ── Main loop ────────────────────────────────────────────────────────────
     while env_step < max_steps:
