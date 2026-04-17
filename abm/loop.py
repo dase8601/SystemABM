@@ -880,7 +880,7 @@ def run_abm_loop(
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt = {
         "condition":   condition,
-        "agent":       agent.state_dict(),
+        "agent":       agent.state_dict() if agent is not None else None,
         "hidden_size": HIDDEN_SIZE,
         "n_actions":   n_actions,
         "env_step":    env_step,
