@@ -452,7 +452,7 @@ def run_abm_loop(
         _make_env           = make_miniworld_env
         _make_vec           = lambda n, seed, use_async: make_miniworld_vec_env(
                                   n, seed=seed, use_async=False, img_size=160)  # sync — OpenGL can't share X across processes
-        latent_dim          = 1536    # DINOv2 patch features (mean+max pool of 768-dim patches)
+        latent_dim          = 768     # DINOv2 ViT-B/14 CLS token
         ppo_rollout         = 128
         eval_interval       = 10_000
         eval_n_eps          = 20
@@ -479,7 +479,7 @@ def run_abm_loop(
         _make_vec           = lambda n, seed, use_async: make_dmcontrol_vec_env(
                                   n, task_name=_task_name, seed=seed,
                                   use_async=use_async, img_size=img_h)
-        latent_dim          = 1536    # DINOv2 patch features (mean+max pool)
+        latent_dim          = 768     # DINOv2 ViT-B/14 CLS token
         ppo_rollout         = 128
         eval_interval       = 10_000
         eval_n_eps          = 20
@@ -541,8 +541,8 @@ def run_abm_loop(
         from .vjepa_encoder import VJEPAEncoder
 
         vjepa_enc = VJEPAEncoder(device=device)
-        feat_dim  = vjepa_enc.feature_dim   # 1536 (patch mean+max pool)
-        logger.info(f"[{condition.upper()}] DINOv2 ViT-B/14 loaded — feature_dim={feat_dim} (patch features)")
+        feat_dim  = vjepa_enc.feature_dim   # 768 CLS token
+        logger.info(f"[{condition.upper()}] DINOv2 ViT-B/14 loaded — feature_dim={feat_dim}")
 
         # MPC planner replaces PPO for miniworld (Yann: abandon RL → MPC)
         from .mpc import CEMPlanner, GoalBuffer

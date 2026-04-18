@@ -197,16 +197,14 @@ class LeWM(nn.Module):
 
 class VJEPAPredictor(nn.Module):
     """
-    Action-conditioned next-latent predictor for DINOv2 patch features.
+    Action-conditioned next-latent predictor for DINOv2 features.
 
-    Operates on 1536-dim patch features (concat of mean+max pool of DINOv2
-    patch tokens). Larger hidden layers to handle the richer representation.
-
+    Operates on 768-dim CLS token from DINOv2 ViT-B/14.
     This is what trains during OBSERVE mode — the DINOv2 encoder stays frozen.
     Prediction error serves as intrinsic reward during ACT mode (replaces RND).
 
     Usage:
-        predictor = VJEPAPredictor(feature_dim=1536, n_actions=4).to(device)
+        predictor = VJEPAPredictor(feature_dim=768, n_actions=4).to(device)
 
         # OBSERVE: train predictor
         loss, info = predictor.train_step(z_t, action, z_next)
@@ -215,7 +213,7 @@ class VJEPAPredictor(nn.Module):
         intrinsic = predictor.intrinsic_reward(z_t, action, z_next)
     """
 
-    def __init__(self, feature_dim: int = 1536, n_actions: int = 4, hidden: int = 512):
+    def __init__(self, feature_dim: int = 768, n_actions: int = 4, hidden: int = 512):
         super().__init__()
         self.feature_dim = feature_dim
         self.n_actions   = n_actions
@@ -300,7 +298,7 @@ class VJEPAReplayBuffer:
     V-JEPA features (768-dim vectors) — much more memory efficient.
     """
 
-    def __init__(self, capacity: int = 50_000, feature_dim: int = 1536):
+    def __init__(self, capacity: int = 50_000, feature_dim: int = 768):
         self.capacity    = capacity
         self.feature_dim = feature_dim
         self._z_t    = np.zeros((capacity, feature_dim), dtype=np.float32)
