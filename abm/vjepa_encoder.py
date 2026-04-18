@@ -19,9 +19,35 @@ Usage:
     z = encoder.encode_single(obs_dict)  # (1, 768)
 """
 
+import sys
 import torch
 import torch.nn.functional as F
 import numpy as np
+
+
+def _patch_dinov2_for_py39():
+    """Add 'from __future__ import annotations' to cached DINOv2 files.
+
+    DINOv2's torch.hub code uses PEP 604 type unions (float | None) which
+    require Python 3.10+. Adding the __future__ import makes all annotations
+    lazy-evaluated strings, so the syntax works on Python 3.7+.
+    """
+    if sys.version_info >= (3, 10):
+        return
+    import glob
+    import os
+    cache_dir = os.path.join(
+        torch.hub.get_dir(), "facebookresearch_dinov2_main"
+    )
+    if not os.path.isdir(cache_dir):
+        return
+    future_line = "from __future__ import annotations\n"
+    for py_file in glob.glob(os.path.join(cache_dir, "**", "*.py"), recursive=True):
+        with open(py_file, "r") as f:
+            content = f.read()
+        if "float | " in content and future_line not in content:
+            with open(py_file, "w") as f:
+                f.write(future_line + content)
 
 
 class VJEPAEncoder:
@@ -41,6 +67,7 @@ class VJEPAEncoder:
         self.img_size = img_size
 
         print("Loading DINOv2 ViT-B/14 (JEPA-class frozen encoder)...")
+        _patch_dinov2_for_py39()
         self.encoder = torch.hub.load(
             "facebookresearch/dinov2",
             "dinov2_vitb14",

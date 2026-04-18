@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-04-18 — Fix DINOv2 + Python 3.9 compatibility (habitat-sim)
+
+### Why
+habitat-sim only provides pre-built packages for Python 3.9. DINOv2's torch.hub code
+uses PEP 604 type unions (`float | None`) which require Python 3.10+. This crashes
+on the conda Python 3.9 environment needed for habitat-sim.
+
+### Fix
+`abm/vjepa_encoder.py` — Added `_patch_dinov2_for_py39()` that automatically adds
+`from __future__ import annotations` to cached DINOv2 .py files before loading. This
+makes all type annotations lazy-evaluated strings, so PEP 604 syntax works on 3.7+.
+The patch is a no-op on Python 3.10+ and only modifies files containing `float | `.
+
 ## 2026-04-18 — Habitat PointNav environment integration
 
 ### Why
