@@ -40,13 +40,8 @@ pip install miniworld omegaconf timm Pillow einops transformers -q
 echo "=== Installing dm_control (DeepMind Control Suite) ==="
 pip install dm_control mujoco -q
 
-echo "=== Installing Habitat (habitat-sim for PointNav) ==="
-pip install habitat-sim --extra-index-url https://aihabitat.org/packages/habitat-sim-nightly -q 2>/dev/null || {
-    echo "  pip install failed — trying conda fallback..."
-    conda install habitat-sim -c conda-forge -c aihabitat -y 2>/dev/null || echo "  habitat-sim install failed (non-critical, skip with --env dmcontrol)"
-}
-# Download test scenes (~89MB)
-python -c "import habitat_sim; habitat_sim.utils.datasets_download.main(['--uids', 'habitat_test_scenes'])" 2>/dev/null || echo "  Test scenes download skipped"
+echo "=== Habitat (requires separate setup) ==="
+echo "  Habitat needs a Python 3.9 conda env. Run: bash setup_habitat.sh"
 
 echo "=== Verifying ==="
 python -c "

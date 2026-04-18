@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-04-18 — Standalone Habitat setup script
+
+### Why
+habitat-sim only ships conda packages for Python 3.9. The RunPod base image uses
+Python 3.11. The old `setup_cloud.sh` habitat block always failed (no pip wheels,
+conda fallback hits wrong Python). RTX 5090 (sm_120) is incompatible with the older
+PyTorch needed for Python 3.9 — must use A100/H100 (sm_80/sm_90).
+
+### Changes
+- `setup_habitat.sh` (NEW) — One-shot script: creates Python 3.9 conda env, installs
+  habitat-sim via conda, PyTorch cu121, all deps, downloads test scenes, runs sanity check.
+- `setup_cloud.sh` — Removed broken habitat install block, replaced with pointer to
+  `setup_habitat.sh`.
+
 ## 2026-04-18 — Fix DINOv2 + Python 3.9 compatibility (habitat-sim)
 
 ### Why
