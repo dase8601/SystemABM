@@ -87,12 +87,14 @@ def plot_learning_curves(results: dict, save_dir: Path, env_type: str) -> Path:
                if env_type == "crafter" else
                "Success Rate (50-episode eval)")
     env_names = {"crafter": "Crafter", "doorkey": "MiniGrid-DoorKey-6x6",
-                  "miniworld": "MiniWorld-MazeS3"}
+                  "miniworld": "MiniWorld-MazeS3", "dmcontrol": "dm_control Walker-Walk"}
     env_name = env_names.get(env_type, env_type)
     if env_type == "crafter":
         target, target_label = 0.15, "15% score target"
     elif env_type == "miniworld":
         target, target_label = 0.50, "50% nav success target"
+    elif env_type == "dmcontrol":
+        target, target_label = 0.50, "50% avg reward target"
     else:
         target, target_label = 0.80, "80% target"
 
@@ -111,7 +113,7 @@ def plot_learning_curves(results: dict, save_dir: Path, env_type: str) -> Path:
     ax.axhline(target, color="red", linestyle="--", lw=1.2, label=target_label)
     ax.set_xlabel("Environment Steps", fontsize=11)
     ax.set_ylabel(y_label, fontsize=11)
-    subtitle = ("DINOv2 ViT-B/14 + MPC (DINO-WM style)" if env_type == "miniworld"
+    subtitle = ("DINOv2 ViT-B/14 + CEM MPC (DINO-WM style)" if env_type in ("miniworld", "dmcontrol")
                  else "LeWM (1.5M params) + LSTM-PPO")
     ax.set_title(
         f"A-B-M Loop: Autonomous vs Fixed-Schedule Mode Switching\n"
@@ -338,12 +340,14 @@ def _img_tag(path: Path, max_width: int = 900) -> str:
 def write_report(save_dir: Path, results: dict, plot_paths: dict,
                  env_type: str) -> Path:
     env_names  = {"crafter": "Crafter", "doorkey": "MiniGrid-DoorKey-6x6",
-                   "miniworld": "MiniWorld-MazeS3"}
+                   "miniworld": "MiniWorld-MazeS3", "dmcontrol": "dm_control Walker-Walk"}
     env_name   = env_names.get(env_type, env_type)
     if env_type == "crafter":
         metric_col = "Steps to 15% score"
     elif env_type == "miniworld":
         metric_col = "Steps to 50% nav success"
+    elif env_type == "dmcontrol":
+        metric_col = "Avg reward (0-1)"
     else:
         metric_col = "Steps to 80%"
 
@@ -406,7 +410,7 @@ def write_report(save_dir: Path, results: dict, plot_paths: dict,
   <p>
     Empirical test of the Dupoux/LeCun/Malik A-B-M architecture (arXiv 2603.15381)
     on <b>{env_name}</b>.
-    {"System A = DINOv2 ViT-B/14 (frozen) + action-conditioned world model predictor. System B = Random Shooting MPC (DINO-WM style — Yann LeCun: abandon RL, use MPC)." if env_type == "miniworld" else "System A = LeWM (~1.5M params, trains from pixels). System B = LSTM-PPO."}
+    {"System A = DINOv2 ViT-B/14 (frozen) + action-conditioned world model predictor. System B = CEM MPC (DINO-WM style — Yann LeCun: abandon RL, use MPC)." if env_type in ("miniworld", "dmcontrol") else "System A = LeWM (~1.5M params, trains from pixels). System B = LSTM-PPO."}
     System M = autonomous plateau-detect FSM vs fixed-schedule timer.
   </p>
   <div class="card">
@@ -455,8 +459,8 @@ def main():
                         help="Run all conditions (Paper 3: autonomous+fixed+mpc_only+random for miniworld)")
     parser.add_argument("--device", default="auto",       help="auto | mps | cpu | cuda")
     parser.add_argument("--env",    default="doorkey",
-                        choices=["doorkey", "crafter", "miniworld"],
-                        help="Environment: doorkey | crafter | miniworld")
+                        choices=["doorkey", "crafter", "miniworld", "dmcontrol"],
+                        help="Environment: doorkey | crafter | miniworld | dmcontrol")
     parser.add_argument("--steps",  type=int, default=800_000)
     parser.add_argument("--seed",   type=int, default=42)
     parser.add_argument("--n-envs", type=int, default=16)
@@ -477,7 +481,7 @@ def main():
 
     conditions = []
     if args.all:
-        if args.env == "miniworld":
+        if args.env in ("miniworld", "dmcontrol"):
             conditions = ALL_CONDITIONS_P3   # autonomous, fixed, mpc_only, random
         else:
             conditions = ALL_CONDITIONS_P2   # autonomous, fixed, ppo_only
@@ -537,7 +541,7 @@ def main():
         o_steps = data.get("observe_steps", 0)
         total_s = a_steps + o_steps
         act_pct = f"{a_steps/total_s:.0%}" if total_s > 0 else "—"
-        metric_label = "steps_to_50" if args.env == "miniworld" else "steps_to_80"
+        metric_label = "steps_to_50" if args.env in ("miniworld", "dmcontrol") else "steps_to_80"
         logger.info(
             f"  {cond:12s}: {metric_label}={s80 or 'N/A':>7}  |  "
             f"peak={peak:.1%}  |  switches={data.get('n_switches', 0)}  |  "

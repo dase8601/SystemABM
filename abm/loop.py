@@ -31,6 +31,7 @@ import torch.optim as optim
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+os.environ.setdefault("MUJOCO_GL", "egl")
 
 import gymnasium
 from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
