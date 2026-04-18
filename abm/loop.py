@@ -741,6 +741,7 @@ def run_abm_loop(
                 # Passively collect goal encodings — any accidental goal reach
                 # during random exploration provides z_goal for MPC planning
                 if use_vjepa:
+                    _prev_goal_count = len(goal_buf) if goal_buf else 0
                     for i in range(n_envs):
                         if rewards_obs[i] > 0:
                             with torch.no_grad():
@@ -748,6 +749,8 @@ def run_abm_loop(
                                     {"rgb": next_obs["rgb"][i : i + 1]}
                                 )
                             goal_buf.push(z_g)
+                    if goal_buf and _prev_goal_count == 0 and len(goal_buf) > 0:
+                        logger.info(f"[{condition.upper()}] First goal collected during OBSERVE! (reward>{0}, goals={len(goal_buf)})")
 
                 with torch.no_grad():
                     z_next = encoder(next_obs)
@@ -873,6 +876,7 @@ def run_abm_loop(
                 act_steps += n_envs
 
                 # Collect goal encodings from successful plan executions
+                _prev_goal_count = len(goal_buf) if goal_buf else 0
                 for i in range(n_envs):
                     if rewards[i] > 0:
                         with torch.no_grad():
@@ -880,6 +884,8 @@ def run_abm_loop(
                                 {"rgb": next_obs["rgb"][i : i + 1]}
                             )
                         goal_buf.push(z_g)
+                if goal_buf and _prev_goal_count == 0 and len(goal_buf) > 0:
+                    logger.info(f"[{condition.upper()}] First goal collected during ACT! (goals={len(goal_buf)})")
 
                 for i in range(n_envs):
                     if dones[i]:
@@ -1003,6 +1009,33 @@ def run_abm_loop(
                 f"act_steps={act_steps:7d} | obs_steps={observe_steps:7d} | "
                 f"switches={n_sw}{frozen_tag}{tier_str} | {elapsed:.0f}s"
             )
+
+            # Verbose details
+            detail_parts = []
+            if use_vjepa and buf_vjepa is not None:
+                detail_parts.append(f"replay={len(buf_vjepa)}")
+            elif buf_lew is not None:
+                detail_parts.append(f"replay={len(buf_lew)}")
+            if use_vjepa and goal_buf is not None:
+                detail_parts.append(f"goals={len(goal_buf)}")
+            if use_vjepa and vjepa_pred is not None and ssl_loss_val is not None:
+                detail_parts.append(f"pred_loss={ssl_loss_val:.4f}")
+            if use_vjepa and vjepa_pred is not None:
+                detail_parts.append(f"pred_std={getattr(vjepa_pred, '_last_z_pred_std', 0.0):.4f}")
+                detail_parts.append(f"cos_sim={getattr(vjepa_pred, '_last_cos_sim', 0.0):.4f}")
+            if mpc is not None:
+                detail_parts.append("mpc=ready")
+            else:
+                detail_parts.append("mpc=NOT_READY")
+            if use_vjepa and goal_buf is not None:
+                z_goal = goal_buf.get_goal()
+                detail_parts.append(f"has_goal={'YES' if z_goal is not None else 'NO'}")
+            if condition == "autonomous" and sysm is not None:
+                ssl_buf_len = len(sysm._ssl_buf)
+                sr_buf_len = len(sysm._sr_buf)
+                time_in_mode = env_step - sysm._mode_start
+                detail_parts.append(f"sysm(ssl_buf={ssl_buf_len},sr_buf={sr_buf_len},time_in={time_in_mode})")
+            logger.info(f"  details: {' | '.join(detail_parts)}")
 
             metrics["env_step"].append(env_step)
             metrics["success_rate"].append(sr)

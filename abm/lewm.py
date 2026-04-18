@@ -251,9 +251,13 @@ class VJEPAPredictor(nn.Module):
         cos_sim  = F.cosine_similarity(z_pred, z_next.detach(), dim=-1)
         loss     = (1 - cos_sim).mean()
 
+        self._last_z_pred_std = z_pred.std().item()
+        self._last_cos_sim = cos_sim.mean().item()
+
         return loss, {
             "predictor_loss": loss.item(),
             "z_pred_std":     z_pred.std().item(),
+            "cos_sim_mean":   cos_sim.mean().item(),
         }
 
     @torch.no_grad()

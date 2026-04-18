@@ -6,11 +6,14 @@ Two variants:
   FixedSystemM      — switches every K environment steps
 """
 
+import logging
 from collections import deque
 from enum import Enum, auto
 from typing import Optional
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 class Mode(Enum):
@@ -89,10 +92,18 @@ class AutonomousSystemM:
 
         # Force deep first OBSERVE — don't switch until world model is solid
         if self.n_switches() == 0 and env_step < self.min_initial_observe:
+            logger.debug(
+                f"[SystemM] OBSERVE: waiting for min_initial_observe "
+                f"(step={env_step}/{self.min_initial_observe})"
+            )
             return self.mode
 
         time_in = env_step - self._mode_start
         if time_in < self.obs_plateau_steps or len(self._ssl_buf) < 20:
+            logger.debug(
+                f"[SystemM] OBSERVE: not enough data for plateau check "
+                f"(time_in={time_in}/{self.obs_plateau_steps}, buf={len(self._ssl_buf)}/20)"
+            )
             return self.mode
 
         # Plateau: first half vs second half of the window
@@ -102,7 +113,14 @@ class AutonomousSystemM:
         h2     = float(np.mean(losses[mid:]))
         rel    = abs(h1 - h2) / (h1 + 1e-8)
 
+        logger.info(
+            f"[SystemM] OBSERVE plateau check: h1={h1:.4f} h2={h2:.4f} "
+            f"rel_change={rel:.4f} threshold={self.plateau_threshold} "
+            f"samples={len(losses)} time_in={time_in}"
+        )
+
         if rel < self.plateau_threshold:
+            logger.info(f"[SystemM] *** SWITCHING OBSERVE→ACT at step {env_step} (loss plateaued) ***")
             self._switch(Mode.ACT, env_step)
         return self.mode
 
@@ -134,7 +152,13 @@ class AutonomousSystemM:
         # instead of the old hardcoded 0.20 prevents interrupting an LSTM-PPO
         # that is still learning but hasn't crossed an arbitrary threshold.
         improvement = recent[-1] - recent[0]
+        logger.info(
+            f"[SystemM] ACT progress check: sr={recent[-1]:.3f} "
+            f"improvement={improvement:.3f} min_sr={self.min_sr_to_stay} "
+            f"n_evals={len(recent)} time_in={time_in}"
+        )
         if recent[-1] < self.min_sr_to_stay and improvement < 0.03:
+            logger.info(f"[SystemM] *** SWITCHING ACT→OBSERVE at step {env_step} (low sr + no progress) ***")
             self._switch(Mode.OBSERVE, env_step)
 
         return self.mode

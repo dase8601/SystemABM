@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-04-18 — Verbose logging for training diagnostics
+
+### Changes
+- `abm/loop.py` — Added detail log line at each eval checkpoint: replay buffer size,
+  goal buffer size, predictor loss, predictor z_pred_std, cos_sim, MPC status,
+  goal availability, and System M internal state (ssl_buf size, sr_buf size, time in mode).
+  Also logs first goal collection event during both OBSERVE and ACT modes.
+- `abm/meta_controller.py` — Added logging to AutonomousSystemM: plateau detection
+  values (h1, h2, rel_change vs threshold), mode switch announcements, and
+  early-return reasons (waiting for min_initial_observe, not enough data).
+- `abm/lewm.py` — VJEPAPredictor now tracks _last_z_pred_std and _last_cos_sim
+  for external logging, and returns cos_sim_mean in the info dict.
+
 ## 2026-04-18 — Fix: Cosine distance loss + action_repeat=4 (ssl_ewa=0.0001 bug)
 
 ### Why
