@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-04-19 — Replace torch.hub with timm for DINOv2 loading
+
+### Why
+torch.hub loads DINOv2 by importing Python source from the repo cache. The latest
+DINOv2 code uses PEP 604 (`float | None`) which crashes on Python 3.9 (required by
+habitat-sim). The previous `_patch_dinov2_for_py39()` workaround failed on fresh
+machines because the cache didn't exist yet when the patch ran.
+
+### Fix
+`abm/vjepa_encoder.py` — Replaced `torch.hub.load("facebookresearch/dinov2")` with
+`timm.create_model("vit_base_patch14_dinov2.lvd142m")`. timm downloads only weights
+(no Python source import), so it works on any Python version. Same model, same weights,
+no patching needed. Removed `_patch_dinov2_for_py39()` entirely.
+
 ## 2026-04-18 — Standalone Habitat setup script
 
 ### Why

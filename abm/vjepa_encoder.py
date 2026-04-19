@@ -19,42 +19,16 @@ Usage:
     z = encoder.encode_single(obs_dict)  # (1, 768)
 """
 
-import sys
 import torch
 import torch.nn.functional as F
 import numpy as np
-
-
-def _patch_dinov2_for_py39():
-    """Add 'from __future__ import annotations' to cached DINOv2 files.
-
-    DINOv2's torch.hub code uses PEP 604 type unions (float | None) which
-    require Python 3.10+. Adding the __future__ import makes all annotations
-    lazy-evaluated strings, so the syntax works on Python 3.7+.
-    """
-    if sys.version_info >= (3, 10):
-        return
-    import glob
-    import os
-    cache_dir = os.path.join(
-        torch.hub.get_dir(), "facebookresearch_dinov2_main"
-    )
-    if not os.path.isdir(cache_dir):
-        return
-    future_line = "from __future__ import annotations\n"
-    for py_file in glob.glob(os.path.join(cache_dir, "**", "*.py"), recursive=True):
-        with open(py_file, "r") as f:
-            content = f.read()
-        if "float | " in content and future_line not in content:
-            with open(py_file, "w") as f:
-                f.write(future_line + content)
 
 
 class VJEPAEncoder:
     """
     Frozen DINOv2 ViT-B/14 encoder.
 
-    Loads DINOv2 ViT-B/14 (86M params) via torch.hub.
+    Loads DINOv2 ViT-B/14 (86M params) via timm.
     Input images are resized to 224x224 and normalized.
     Output is the L2-normalized CLS token: (B, 768).
     """
@@ -67,11 +41,11 @@ class VJEPAEncoder:
         self.img_size = img_size
 
         print("Loading DINOv2 ViT-B/14 (JEPA-class frozen encoder)...")
-        _patch_dinov2_for_py39()
-        self.encoder = torch.hub.load(
-            "facebookresearch/dinov2",
-            "dinov2_vitb14",
+        import timm
+        self.encoder = timm.create_model(
+            "vit_base_patch14_dinov2.lvd142m",
             pretrained=True,
+            num_classes=0,
         )
         self.encoder = self.encoder.to(device).eval()
 
@@ -91,7 +65,7 @@ class VJEPAEncoder:
             noise2 = torch.randn(1, 3, img_size, img_size, device=device).clamp(0, 1)
             all_in = torch.cat([black, white, noise1, noise2])
             all_in = (all_in - self._mean) / self._std
-            feat   = self.encoder.forward_features(all_in)["x_norm_clstoken"]
+            feat   = self.encoder(all_in)
             feat   = F.normalize(feat, p=2, dim=-1)
             bw_sim = F.cosine_similarity(feat[0:1], feat[1:2]).item()
             n_sim  = F.cosine_similarity(feat[2:3], feat[3:4]).item()
@@ -124,7 +98,7 @@ class VJEPAEncoder:
     def encode(self, obs_dict: dict) -> torch.Tensor:
         x   = self._obs_to_tensor(obs_dict)
         x   = self._preprocess(x)
-        out = self.encoder.forward_features(x)["x_norm_clstoken"]
+        out = self.encoder(x)
         return F.normalize(out, p=2, dim=-1)
 
     @torch.no_grad()
@@ -134,5 +108,5 @@ class VJEPAEncoder:
     @torch.no_grad()
     def encode_tensor(self, imgs: torch.Tensor) -> torch.Tensor:
         x   = self._preprocess(imgs)
-        out = self.encoder.forward_features(x)["x_norm_clstoken"]
+        out = self.encoder(x)
         return F.normalize(out, p=2, dim=-1)
