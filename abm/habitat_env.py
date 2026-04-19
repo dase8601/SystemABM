@@ -171,16 +171,16 @@ class HabitatPointNavSimpleEnv(gymnasium.Env):
         agent_cfg = habitat_sim.agent.AgentConfiguration()
         agent_cfg.sensor_specifications = [rgb_sensor]
         agent_cfg.action_space = {
-            0: habitat_sim.agent.ActionSpec("stop"),
-            1: habitat_sim.agent.ActionSpec(
+            "stop": habitat_sim.agent.ActionSpec("stop"),
+            "move_forward": habitat_sim.agent.ActionSpec(
                 "move_forward",
                 habitat_sim.agent.ActuationSpec(amount=0.25),
             ),
-            2: habitat_sim.agent.ActionSpec(
+            "turn_left": habitat_sim.agent.ActionSpec(
                 "turn_left",
                 habitat_sim.agent.ActuationSpec(amount=10.0),
             ),
-            3: habitat_sim.agent.ActionSpec(
+            "turn_right": habitat_sim.agent.ActionSpec(
                 "turn_right",
                 habitat_sim.agent.ActuationSpec(amount=10.0),
             ),
