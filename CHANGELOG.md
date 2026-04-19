@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-04-19 — Run 2 tuning: H=15, cosine distance, diagnostic logging
+
+### Why
+Run 1 (200K steps) achieved 0% success despite working architecture. Root causes:
+H=7 horizon too short for PointNav (1.75m reach vs 5-10m episodes), L2 distance
+wrong for cosine-trained DINOv2 features, and no diagnostic data to debug CEM planning.
+
+### Changes
+- `abm/mpc.py` — CEM scoring: L2² → cosine distance (1 - cos_sim). Added
+  `_last_best_cost` tracking for logging.
+- `abm/loop.py` — CEM horizon 7→15. Added cem_cost and goal_div (goal embedding
+  std) to verbose logging.
+- `abm/habitat_env.py` — Suppress noisy C++ warnings (HABITAT_SIM_LOG, MAGNUM_LOG,
+  GLOG_minloglevel).
+
 ## 2026-04-19 — Replace torch.hub with timm for DINOv2 loading
 
 ### Why

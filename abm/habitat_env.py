@@ -156,6 +156,11 @@ class HabitatPointNavSimpleEnv(gymnasium.Env):
                 )
             scene_path = os.path.abspath(candidates[0])
 
+        # Suppress noisy habitat-sim C++ warnings about missing semantic files
+        os.environ.setdefault("HABITAT_SIM_LOG", "quiet")
+        os.environ.setdefault("MAGNUM_LOG", "quiet")
+        os.environ.setdefault("GLOG_minloglevel", "3")
+
         # Minimal habitat-sim config
         sim_cfg = habitat_sim.SimulatorConfiguration()
         sim_cfg.scene_id = os.path.abspath(scene_path)

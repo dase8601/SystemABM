@@ -2,8 +2,8 @@
 abm/mpc.py — Cross-Entropy Method (CEM) Model-Predictive Control planner.
 
 Upgraded from Random Shooting to CEM per "What Drives Success in Physical
-Planning with JEPA-WMs" (Terver et al., Jan 2026 — Yann's team):
-  "CEM L2 emerged as optimal overall"
+Planning with JEPA-WMs" (Terver et al., Jan 2026 — Yann's team).
+Uses cosine distance (not L2) since DINOv2 features are cosine-trained.
 
 CEM iteratively refines action sequences by:
 1. Sample K action sequences from current distribution
@@ -85,7 +85,8 @@ class CEMPlanner:
             z        = self.predictor(z, a_onehot)
 
         z_goal_exp = z_goal.unsqueeze(1).expand(B, K, feat_dim).reshape(B * K, feat_dim)
-        dist = ((z - z_goal_exp) ** 2).sum(-1).reshape(B, K)
+        cos_sim = F.cosine_similarity(z, z_goal_exp, dim=-1)
+        dist = (1.0 - cos_sim).reshape(B, K)
         return dist
 
     @torch.no_grad()
@@ -141,6 +142,7 @@ class CEMPlanner:
         # Final: pick best first action from last iteration's best candidate
         best_idx = dist.argmin(dim=1)  # (B,)
         best_actions = actions[torch.arange(B, device=self.device), best_idx, 0]
+        self._last_best_cost = dist[torch.arange(B, device=self.device), best_idx].mean().item()
 
         return best_actions.cpu().numpy()
 

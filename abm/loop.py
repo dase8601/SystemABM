@@ -877,10 +877,10 @@ def run_abm_loop(
                     from .mpc import CEMPlanner
                     mpc = CEMPlanner(
                         vjepa_pred, n_actions=n_actions,
-                        horizon=7, n_samples=256, n_elites=32,
+                        horizon=15, n_samples=256, n_elites=32,
                         n_iters=3, device=device,
                     )
-                    logger.info(f"[{condition.upper()}] CEM planner ready (horizon=7, samples=256, elites=32, iters=3)")
+                    logger.info(f"[{condition.upper()}] CEM planner ready (horizon=15, samples=256, elites=32, iters=3)")
 
             else:
                 # LeWM CNN path (doorkey / crafter)
@@ -1121,11 +1121,16 @@ def run_abm_loop(
                 detail_parts.append(f"cos_sim={getattr(vjepa_pred, '_last_cos_sim', 0.0):.4f}")
             if mpc is not None:
                 detail_parts.append("mpc=ready")
+                detail_parts.append(f"cem_cost={getattr(mpc, '_last_best_cost', 0.0):.4f}")
             else:
                 detail_parts.append("mpc=NOT_READY")
             if use_vjepa and goal_buf is not None:
                 z_goal = goal_buf.get_goal()
                 detail_parts.append(f"has_goal={'YES' if z_goal is not None else 'NO'}")
+                if len(goal_buf) > 1:
+                    all_goals = torch.cat(goal_buf._buf, dim=0)
+                    goal_std = all_goals.std(dim=0).mean().item()
+                    detail_parts.append(f"goal_div={goal_std:.4f}")
             if condition == "autonomous" and sysm is not None:
                 ssl_buf_len = len(sysm._ssl_buf)
                 sr_buf_len = len(sysm._sr_buf)
